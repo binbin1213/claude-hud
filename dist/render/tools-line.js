@@ -44,7 +44,7 @@ export function renderToolsLine(ctx) {
         .slice(0, 4);
     for (const [name, count] of sortedTools) {
         const displayName = getToolName(name);
-        parts.push(`${green('✓')} ${displayName} ${dim(`×${count}`)}`);
+        parts.push(`${green('✓')} ${cyan(displayName)} ${dim(`×${count}`)}`);
     }
     if (parts.length === 0) {
         return null;

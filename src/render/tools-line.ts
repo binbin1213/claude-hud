@@ -55,7 +55,7 @@ export function renderToolsLine(ctx: RenderContext): string | null {
 
   for (const [name, count] of sortedTools) {
     const displayName = getToolName(name);
-    parts.push(`${green('✓')} ${displayName} ${dim(`×${count}`)}`);
+    parts.push(`${green('✓')} ${cyan(displayName)} ${dim(`×${count}`)}`);
   }
 
   if (parts.length === 0) {
