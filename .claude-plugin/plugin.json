@@ -1,13 +1,13 @@
 {
   "name": "claude-hud",
-  "description": "Real-time statusline HUD for Claude Code - context health, tool activity, agent tracking, and todo progress",
+  "description": "Claude Code 实时状态栏 - 上下文健康度、工具活动、代理跟踪、待办进度",
   "version": "0.0.10",
   "author": {
-    "name": "yang66yang",
-    "url": "https://github.com/yang66yang"
+    "name": "binbin1213",
+    "url": "https://github.com/binbin1213"
   },
-  "homepage": "https://github.com/yang66yang/claude-hud",
-  "repository": "https://github.com/yang66yang/claude-hud",
+  "homepage": "https://github.com/binbin1213/claude-hud",
+  "repository": "https://github.com/binbin1213/claude-hud",
   "license": "MIT",
   "keywords": ["hud", "monitoring", "statusline", "context", "tools", "agents", "todos", "claude-code"]
 }

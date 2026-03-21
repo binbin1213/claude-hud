@@ -1,7 +1,7 @@
 {
   "name": "claude-hud",
   "version": "0.0.10",
-  "description": "Real-time statusline HUD for Claude Code",
+  "description": "Claude Code 实时状态栏插件",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -17,8 +17,12 @@
     "statusline",
     "hud"
   ],
-  "author": "Jarrod Watts",
+  "author": "binbin1213",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/binbin1213/claude-hud.git"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
