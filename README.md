@@ -221,6 +221,12 @@ npm ci && npm run build
 npm test
 ```
 
+## 致谢
+
+本项目基于 [jarrodwatts/claude-hud](https://github.com/jarrodwatts/claude-hud) 进行中文化修改和定制，感谢原作者的出色工作！
+
+如果你喜欢这个项目，请别忘了 **给原作者点个 Star ⭐**：https://github.com/jarrodwatts/claude-hud
+
 ## 许可证
 
 MIT — 详见 [LICENSE](LICENSE)
