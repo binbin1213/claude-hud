@@ -8,7 +8,7 @@ Real-time statusline showing context usage, active tools, running agents, and to
 
 **Step 1: Add the marketplace**
 ```
-/plugin marketplace add yang66yang/claude-hud
+/plugin marketplace add binbin1213/claude-hud
 ```
 
 **Step 2: Install the plugin**
@@ -44,7 +44,7 @@ If not installed or outdated, direct user to https://claude.ai/code
 
 Run this command in Claude Code:
 ```
-/plugin marketplace add yang66yang/claude-hud
+/plugin marketplace add binbin1213/claude-hud
 ```
 
 ### Step 3: Install the Plugin
@@ -76,7 +76,7 @@ Ask the user: "Would you like to star the repository to support the project?"
 
 Only if they explicitly agree, run:
 ```bash
-gh repo star yang66yang/claude-hud
+gh repo star binbin1213/claude-hud
 ```
 
 Never run this automatically without user consent.
@@ -92,7 +92,7 @@ Technical documentation for agents who need to understand, modify, or debug Clau
 <plugin>
   <name>Claude HUD</name>
   <description>Real-time statusline showing context usage, active tools, running agents, and todo progress. Always visible below your input, zero config required.</description>
-  <repository>github.com/yang66yang/claude-hud</repository>
+  <repository>github.com/binbin1213/claude-hud</repository>
   <license>MIT</license>
 </plugin>
 
@@ -236,7 +236,7 @@ Technical documentation for agents who need to understand, modify, or debug Clau
       "name": "claude-hud",
       "description": "Real-time statusline HUD for Claude Code",
       "version": "0.0.1",
-      "author": { "name": "yang66yang", "url": "https://github.com/yang66yang" }
+      "author": { "name": "binbin1213", "url": "https://github.com/binbin1213" }
     }
   </manifest_content>
   <note>The plugin.json contains metadata only. statusLine is NOT a valid plugin.json field.</note>
@@ -249,7 +249,7 @@ Technical documentation for agents who need to understand, modify, or debug Clau
 
 <development>
   <setup>
-    git clone https://github.com/yang66yang/claude-hud
+    git clone https://github.com/binbin1213/claude-hud
     cd claude-hud
     npm ci
     npm run build
@@ -294,7 +294,7 @@ Technical documentation for agents who need to understand, modify, or debug Clau
 <troubleshooting>
   <issue name="Statusline not appearing">
     <cause>Plugin not installed or statusLine not configured</cause>
-    <solution>Run: /plugin marketplace add yang66yang/claude-hud</solution>
+    <solution>Run: /plugin marketplace add binbin1213/claude-hud</solution>
     <solution>Run: /plugin install claude-hud</solution>
     <solution>Run: /claude-hud:setup</solution>
     <solution>Ensure Claude Code is v1.0.80 or later</solution>
