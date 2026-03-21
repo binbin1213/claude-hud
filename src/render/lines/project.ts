@@ -49,10 +49,10 @@ export function renderProjectLine(ctx: RenderContext): string | null {
     if (gitConfig?.showFileStats && ctx.gitStatus.fileStats) {
       const { modified, added, deleted, untracked } = ctx.gitStatus.fileStats;
       const statParts: string[] = [];
-      if (modified > 0) statParts.push(`!${modified}`);
-      if (added > 0) statParts.push(`+${added}`);
-      if (deleted > 0) statParts.push(`✘${deleted}`);
-      if (untracked > 0) statParts.push(`?${untracked}`);
+      if (modified > 0) statParts.push(`改:${modified}`);
+      if (added > 0) statParts.push(`加:${added}`);
+      if (deleted > 0) statParts.push(`删:${deleted}`);
+      if (untracked > 0) statParts.push(`新:${untracked}`);
       if (statParts.length > 0) {
         gitParts.push(` ${statParts.join(' ')}`);
       }

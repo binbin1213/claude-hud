@@ -371,6 +371,44 @@ function renderExpanded(ctx: RenderContext): Array<{ line: string; isActivity: b
     }
 
     const nextElement = elementOrder[index + 1];
+    const thirdElement = elementOrder[index + 2];
+    // Check if we have context+usage+environment or usage+context+environment - merge all three
+    if (
+      ((element === 'context' && nextElement === 'usage') || (element === 'usage' && nextElement === 'context')) &&
+      !seen.has(nextElement) && thirdElement === 'environment' && !seen.has('environment')
+    ) {
+      seen.add(element);
+      seen.add(nextElement);
+      seen.add(thirdElement);
+
+      const line1 = renderElementLine(ctx, element);
+      const line2 = renderElementLine(ctx, nextElement);
+      const line3 = renderElementLine(ctx, thirdElement);
+
+      let merged = '';
+      if (line1 && line2 && line3) {
+        merged = `${line1} │ ${line2} │ ${line3}`;
+      } else if (line1 && line2) {
+        merged = `${line1} │ ${line2}`;
+      } else if (line1 && line3) {
+        merged = `${line1} │ ${line3}`;
+      } else if (line2 && line3) {
+        merged = `${line2} │ ${line3}`;
+      } else if (line1) {
+        merged = line1;
+      } else if (line2) {
+        merged = line2;
+      } else if (line3) {
+        merged = line3;
+      }
+
+      if (merged) {
+        lines.push({ line: merged, isActivity: false });
+      }
+
+      continue;
+    }
+    // Check for context+usage or usage+context - merge two
     if (
       (element === 'context' && nextElement === 'usage' && !seen.has('usage'))
       || (element === 'usage' && nextElement === 'context' && !seen.has('context'))
