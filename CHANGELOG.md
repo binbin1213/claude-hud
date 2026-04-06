@@ -2,6 +2,24 @@
 
 All notable changes to Claude HUD will be documented in this file.
 
+## [中文优化版] - 2026-04-06
+
+### Added
+- 智谱 AI Token 和时间配额实时查询显示
+- 中文界面标签（配额、时间、上下文等）
+- `run-hud.sh` wrapper 脚本确保环境变量正确传递
+- 配额缓存时间优化（60s → 300s）
+
+### Fixed
+- 修正智谱时间配额显示标签（mcp → 时间）
+- 修复 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` 导致的 API 令牌无法传递问题
+
+### Changed
+- 删除与修改版无关的政策性文件（CODE_OF_CONDUCT.md, CONTRIBUTING.md 等）
+- 更新 README.md 添加中文优化版说明和原作者引用
+
+---
+
 ## [Unreleased]
 
 ## [0.0.10] - 2026-03-14
