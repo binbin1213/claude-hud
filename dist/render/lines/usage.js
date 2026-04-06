@@ -80,11 +80,11 @@ function renderZhipuUsageLine(zhipuUsage, colors) {
         const resetSuffix = resetStr ? ` (${resetStr})` : '';
         parts.push(`token ${quotaBar(tp, 6, colors)} ${color}${tp}%${RESET}${dim(resetSuffix)}`);
     }
-    // MCP 额度
+    // 时间额度
     if (zhipuUsage.timePercentage !== null) {
-        const mcpP = zhipuUsage.timePercentage;
-        const color = getQuotaColor(mcpP, colors);
-        parts.push(`mcp ${quotaBar(mcpP, 6, colors)} ${color}${mcpP}%${RESET}`);
+        const timeP = zhipuUsage.timePercentage;
+        const color = getQuotaColor(timeP, colors);
+        parts.push(`时间 ${quotaBar(timeP, 6, colors)} ${color}${timeP}%${RESET}`);
     }
     if (parts.length === 0) {
         return null;

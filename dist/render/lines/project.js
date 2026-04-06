@@ -41,13 +41,13 @@ export function renderProjectLine(ctx) {
             const { modified, added, deleted, untracked } = ctx.gitStatus.fileStats;
             const statParts = [];
             if (modified > 0)
-                statParts.push(`!${modified}`);
+                statParts.push(`改:${modified}`);
             if (added > 0)
-                statParts.push(`+${added}`);
+                statParts.push(`加:${added}`);
             if (deleted > 0)
-                statParts.push(`✘${deleted}`);
+                statParts.push(`删:${deleted}`);
             if (untracked > 0)
-                statParts.push(`?${untracked}`);
+                statParts.push(`新:${untracked}`);
             if (statParts.length > 0) {
                 gitParts.push(` ${statParts.join(' ')}`);
             }

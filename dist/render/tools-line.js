@@ -1,4 +1,26 @@
 import { yellow, green, cyan, dim } from './colors.js';
+const toolNameChinese = {
+    'Read': '读取',
+    'Edit': '编辑',
+    'Bash': '命令',
+    'Grep': '搜索',
+    'Glob': '查找',
+    'Agent': '代理',
+    'Write': '写入',
+    'TaskOutput': '任务输出',
+    'TaskCreate': '任务创建',
+    'TaskUpdate': '任务更新',
+    'TaskList': '任务列表',
+    'AskUserQuestion': '询问用户',
+    'WebFetch': '网页获取',
+    'WebSearch': '网页搜索',
+    'Skill': '技能',
+    'NotebookEdit': '笔记本编辑',
+    'Mcp': 'MCP'
+};
+function getToolName(name) {
+    return toolNameChinese[name] || name;
+}
 export function renderToolsLine(ctx) {
     const { tools } = ctx.transcript;
     if (tools.length === 0) {
@@ -9,7 +31,8 @@ export function renderToolsLine(ctx) {
     const completedTools = tools.filter((t) => t.status === 'completed' || t.status === 'error');
     for (const tool of runningTools.slice(-2)) {
         const target = tool.target ? truncatePath(tool.target) : '';
-        parts.push(`${yellow('◐')} ${cyan(tool.name)}${target ? dim(`: ${target}`) : ''}`);
+        const displayName = getToolName(tool.name);
+        parts.push(`${yellow('◐')} ${cyan(displayName)}${target ? dim(`: ${target}`) : ''}`);
     }
     const toolCounts = new Map();
     for (const tool of completedTools) {
@@ -20,7 +43,8 @@ export function renderToolsLine(ctx) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 4);
     for (const [name, count] of sortedTools) {
-        parts.push(`${green('✓')} ${name} ${dim(`×${count}`)}`);
+        const displayName = getToolName(name);
+        parts.push(`${green('✓')} ${cyan(displayName)} ${dim(`×${count}`)}`);
     }
     if (parts.length === 0) {
         return null;
