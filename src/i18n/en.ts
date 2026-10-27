@@ -1,0 +1,75 @@
+import type { Messages } from "./types.js";
+
+export const en: Messages = {
+  // Labels
+  "label.context": "Context",
+  "label.usage": "Usage",
+  "label.weekly": "Weekly",
+  "label.fiveHour": "5h",
+  "label.sevenDay": "7d",
+  "label.approxRam": "Approx RAM",
+  "label.promptCache": "Cache",
+  "label.cacheHitRate": "Cache hit",
+  "label.rules": "rules",
+  "label.hooks": "hooks",
+  "label.cost": "Cost",
+  "label.today": "Today",
+  "label.week": "Week",
+  "label.tokens": "Tokens",
+  "label.sessionStarted": "Started",
+  "label.lastReply": "Last reply",
+  "label.advisor": "Advisor",
+  "label.compactions": "Compactions",
+  "label.skills": "Skills",
+  "label.mcps": "MCPs",
+  "label.addedDirs": "Added dirs:",
+  "label.style": "style:",
+  "label.agent": "agent",
+  "label.conflict": "conflict",
+
+  // Status
+  "status.limitReached": "Limit reached",
+  "status.limit": "Limit",
+  "status.allTodosComplete": "All todos complete",
+  "status.expired": "expired",
+
+  // Format
+  "format.resets": "resets",
+  "format.resetsIn": "resets in",
+  "format.absoluteTime": "at {time}",
+  "format.untilTime": "until {time}",
+  "format.in": "in",
+  "format.cache": "cache",
+  "format.out": "out",
+  "format.tok": "tok",
+  "format.tokPerSec": "tok/s",
+  "format.justNow": "just now",
+  "format.relativeTime": "{value} ago",
+  "format.elapsed": "{value}% elapsed",
+  "format.more": "+{count} more",
+  "format.lessThanSecond": "<1s",
+  "format.lessThanMinute": "<1m",
+  "format.duration.seconds": "{value}s",
+  "format.duration.minutes": "{value}m",
+  "format.duration.hours": "{value}h",
+  "format.duration.hoursMinutes": "{hours}h {minutes}m",
+  "format.duration.minutesSeconds": "{minutes}m {seconds}s",
+  "format.duration.days": "{value}d",
+  "format.duration.daysHours": "{days}d {hours}h",
+
+  // Effort
+  "effort.low": "low",
+  "effort.medium": "medium",
+  "effort.high": "high",
+  "effort.xhigh": "xhigh",
+  "effort.max": "max",
+
+  // Errors
+  "error.prefix": "[claude-hud] Error:",
+  "error.unknown": "Unknown error",
+
+  // Init
+  "init.initializing": "[claude-hud] Initializing...",
+  "init.macosNote":
+    "[claude-hud] Note: On macOS, you may need to restart Claude Code for the HUD to appear.",
+};

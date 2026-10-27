@@ -1,169 +1,57 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatSessionDuration, main } from '../dist/index.js';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { isHudDisabled } from '../dist/index.js';
+import { formatSessionDuration } from '../dist/utils/format.js';
 
-test('formatSessionDuration returns empty string without session start', () => {
-  assert.equal(formatSessionDuration(undefined, () => 0), '');
-});
+const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
-test('formatSessionDuration formats sub-minute and minute durations', () => {
-  const start = new Date(0);
-  assert.equal(formatSessionDuration(start, () => 30 * 1000), '<1m');
-  assert.equal(formatSessionDuration(start, () => 5 * 60 * 1000), '5m');
-});
-
-test('formatSessionDuration formats hour durations', () => {
-  const start = new Date(0);
-  assert.equal(formatSessionDuration(start, () => 2 * 60 * 60 * 1000 + 5 * 60 * 1000), '2h 5m');
-});
-
-test('formatSessionDuration uses Date.now by default', () => {
-  const originalNow = Date.now;
-  Date.now = () => 60000;
+async function runCli(input, env = {}) {
+  const home = await mkdtemp(path.join(tmpdir(), 'hud-index-'));
   try {
-    const result = formatSessionDuration(new Date(0));
-    assert.equal(result, '1m');
-  } finally {
-    Date.now = originalNow;
-  }
-});
-
-test('main logs an error when dependencies throw', async () => {
-  const logs = [];
-  await main({
-    readStdin: async () => {
-      throw new Error('boom');
-    },
-    parseTranscript: async () => ({ tools: [], agents: [], todos: [] }),
-    countConfigs: async () => ({ claudeMdCount: 0, rulesCount: 0, mcpCount: 0, hooksCount: 0 }),
-    getGitBranch: async () => null,
-    getUsage: async () => null,
-    render: () => {},
-    now: () => Date.now(),
-    log: (...args) => logs.push(args.join(' ')),
-  });
-
-  assert.ok(logs.some((line) => line.includes('[claude-hud] Error:')));
-});
-
-test('main logs unknown error for non-Error throws', async () => {
-  const logs = [];
-  await main({
-    readStdin: async () => {
-      throw 'boom';
-    },
-    parseTranscript: async () => ({ tools: [], agents: [], todos: [] }),
-    countConfigs: async () => ({ claudeMdCount: 0, rulesCount: 0, mcpCount: 0, hooksCount: 0 }),
-    getGitBranch: async () => null,
-    getUsage: async () => null,
-    render: () => {},
-    now: () => Date.now(),
-    log: (...args) => logs.push(args.join(' ')),
-  });
-
-  assert.ok(logs.some((line) => line.includes('Unknown error')));
-});
-
-test('index entrypoint runs when executed directly', async () => {
-  const originalArgv = [...process.argv];
-  const originalIsTTY = process.stdin.isTTY;
-  const originalLog = console.log;
-  const logs = [];
-
-  try {
-    const moduleUrl = new URL('../dist/index.js', import.meta.url);
-    process.argv[1] = new URL(moduleUrl).pathname;
-    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
-    console.log = (...args) => logs.push(args.join(' '));
-    await import(`${moduleUrl}?entry=${Date.now()}`);
-  } finally {
-    console.log = originalLog;
-    process.argv = originalArgv;
-    Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, configurable: true });
-  }
-
-  assert.ok(logs.some((line) => line.includes('[claude-hud] Initializing...')));
-});
-
-test('main executes the happy path with default dependencies', async () => {
-  const originalNow = Date.now;
-  Date.now = () => 60000;
-  let renderedContext;
-
-  try {
-    await main({
-      readStdin: async () => ({
-        model: { display_name: 'Opus' },
-        context_window: { context_window_size: 100, current_usage: { input_tokens: 90 } },
-      }),
-      parseTranscript: async () => ({ tools: [], agents: [], todos: [], sessionStart: new Date(0) }),
-      countConfigs: async () => ({ claudeMdCount: 0, rulesCount: 0, mcpCount: 0, hooksCount: 0 }),
-      getGitBranch: async () => null,
-      getUsage: async () => null,
-      render: (ctx) => {
-        renderedContext = ctx;
-      },
+    return spawnSync(process.execPath, [entry], {
+      input,
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH, HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude'), ...env },
     });
   } finally {
-    Date.now = originalNow;
+    await rm(home, { recursive: true, force: true });
   }
+}
 
-  assert.equal(renderedContext?.sessionDuration, '1m');
+test('isHudDisabled treats any value but an explicit negative as disabled', () => {
+  for (const value of ['1', 'true', 'TRUE', 'yes', 'on', ' 1 ']) {
+    assert.equal(isHudDisabled({ CLAUDE_HUD_DISABLE: value }), true, value);
+  }
+  for (const value of [undefined, '', ' ', '0', 'false', 'OFF', 'no']) {
+    assert.equal(isHudDisabled({ CLAUDE_HUD_DISABLE: value }), false, String(value));
+  }
 });
 
-test('main includes git status in render context', async () => {
-  let renderedContext;
+test('the CLI renders stdin, stays silent when disabled, and reports bad input', async () => {
+  const stdin = JSON.stringify({ model: { display_name: 'Opus' }, context_window: { used_percentage: 12, context_window_size: 200_000 } });
 
-  await main({
-    readStdin: async () => ({
-      model: { display_name: 'Opus' },
-      context_window: { context_window_size: 100, current_usage: { input_tokens: 10 } },
-      cwd: '/some/path',
-    }),
-    parseTranscript: async () => ({ tools: [], agents: [], todos: [] }),
-    countConfigs: async () => ({ claudeMdCount: 0, rulesCount: 0, mcpCount: 0, hooksCount: 0 }),
-    getGitStatus: async () => ({ branch: 'feature/test', isDirty: false, ahead: 0, behind: 0 }),
-    getUsage: async () => null,
-    loadConfig: async () => ({
-      lineLayout: 'compact',
-      showSeparators: false,
-      pathLevels: 1,
-      gitStatus: { enabled: true, showDirty: true, showAheadBehind: false, showFileStats: false },
-      display: { showModel: true, showContextBar: true, contextValue: 'percent', showConfigCounts: true, showDuration: true, showSpeed: false, showTokenBreakdown: true, showUsage: true, showTools: true, showAgents: true, showTodos: true, autocompactBuffer: 'enabled', usageThreshold: 0, sevenDayThreshold: 80, environmentThreshold: 0 },
-      usage: { cacheTtlSeconds: 60, failureCacheTtlSeconds: 15 },
-    }),
-    render: (ctx) => {
-      renderedContext = ctx;
-    },
-  });
+  const rendered = await runCli(stdin);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\[Opus\]/);
+  assert.match(rendered.stdout, /12%/);
 
-  assert.equal(renderedContext?.gitStatus?.branch, 'feature/test');
+  const disabled = await runCli(stdin, { CLAUDE_HUD_DISABLE: '1' });
+  assert.equal(disabled.stdout, '');
+
+  // No input is how setup checks that the command starts.
+  const empty = await runCli('');
+  assert.match(empty.stdout, /\[claude-hud\] 正在初始化/);
 });
 
-test('main includes usageData in render context', async () => {
-  let renderedContext;
-  const mockUsageData = {
-    planName: 'Max',
-    fiveHour: 50,
-    sevenDay: 25,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-    limitReached: false,
-  };
-
-  await main({
-    readStdin: async () => ({
-      model: { display_name: 'Opus' },
-      context_window: { context_window_size: 100, current_usage: { input_tokens: 10 } },
-    }),
-    parseTranscript: async () => ({ tools: [], agents: [], todos: [] }),
-    countConfigs: async () => ({ claudeMdCount: 0, rulesCount: 0, mcpCount: 0, hooksCount: 0 }),
-    getGitBranch: async () => null,
-    getUsage: async () => mockUsageData,
-    render: (ctx) => {
-      renderedContext = ctx;
-    },
-  });
-
-  assert.deepEqual(renderedContext?.usageData, mockUsageData);
+test('formatSessionDuration formats Claude Code session time', () => {
+  assert.equal(formatSessionDuration(undefined), '');
+  assert.equal(formatSessionDuration(-1), '');
+  assert.equal(formatSessionDuration(30_000), '<1m');
+  assert.equal(formatSessionDuration(5 * 60_000), '5m');
+  assert.equal(formatSessionDuration(125 * 60_000), '2h 5m');
 });

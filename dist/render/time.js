@@ -1,0 +1,93 @@
+import { interpolate, t } from '../i18n/index.js';
+export function wallClock(display) {
+    return { hourCycle: display?.hourCycle ?? 'auto', showSeconds: display?.showClockSeconds ?? false };
+}
+const duration = (key, params) => interpolate(t(key), params);
+function formatDuration(ms) {
+    const totalMins = Math.ceil(ms / 60000);
+    if (totalMins < 60)
+        return duration('format.duration.minutes', { value: totalMins });
+    const hours = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    if (hours >= 24) {
+        const days = Math.floor(hours / 24);
+        return hours % 24 > 0
+            ? duration('format.duration.daysHours', { days, hours: hours % 24 })
+            : duration('format.duration.days', { value: days });
+    }
+    return mins > 0
+        ? duration('format.duration.hoursMinutes', { hours, minutes: mins })
+        : duration('format.duration.hours', { value: hours });
+}
+/** Wall-clock time such as `at 14:30`, with the date when it isn't today. */
+export function formatAbsoluteTime(at, now, opts, pattern = 'format.absoluteTime') {
+    const timeOpts = { hour: '2-digit', minute: '2-digit' };
+    if (opts.showSeconds)
+        timeOpts.second = '2-digit';
+    if (opts.hourCycle !== 'auto')
+        timeOpts.hourCycle = opts.hourCycle;
+    const time = at.toLocaleTimeString([], timeOpts);
+    const sameDay = at.toDateString() === now.toDateString();
+    const value = sameDay ? time : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+    return interpolate(t(pattern), { time: value });
+}
+/** `2h 30m`, `at 14:30`, or both. Empty when the reset is unknown or already past. */
+export function formatResetTime(resetAt, mode, opts, now) {
+    if (!resetAt)
+        return '';
+    const remainingMs = resetAt.getTime() - now;
+    if (remainingMs <= 0)
+        return '';
+    if (mode === 'relative')
+        return formatDuration(remainingMs);
+    const absolute = formatAbsoluteTime(resetAt, new Date(now), opts);
+    return mode === 'absolute' ? absolute : `${formatDuration(remainingMs)}, ${absolute}`;
+}
+function formatElapsed(resetAt, windowMs, now) {
+    if (!resetAt)
+        return '';
+    const elapsed = Math.round(((now - (resetAt.getTime() - windowMs)) / windowMs) * 100);
+    return interpolate(t('format.elapsed'), { value: Math.max(0, Math.min(100, elapsed)) });
+}
+/** A usage window's time in the configured format, including the elapsed-share modes. */
+export function formatWindowTime(resetAt, windowMs, timeFormat, opts, now) {
+    if (timeFormat === 'elapsed')
+        return formatElapsed(resetAt, windowMs, now);
+    if (timeFormat === 'elapsedAndAbsolute') {
+        const elapsed = formatElapsed(resetAt, windowMs, now);
+        const absolute = formatResetTime(resetAt, 'absolute', opts, now);
+        return elapsed && absolute ? `${elapsed}, ${absolute}` : elapsed || absolute;
+    }
+    return formatResetTime(resetAt, timeFormat, opts, now);
+}
+/** The reset format for a limit-reached notice, which has no elapsed share to show. */
+export function limitTimeFormat(timeFormat) {
+    if (timeFormat === 'elapsedAndAbsolute')
+        return 'absolute';
+    if (timeFormat === 'elapsed')
+        return 'relative';
+    return timeFormat;
+}
+/** `45s ago`, `2h 5m ago`, `3d 4h ago`. */
+export function formatAgo(ms) {
+    if (ms < 0)
+        return t('format.justNow');
+    const ago = (value) => interpolate(t('format.relativeTime'), { value });
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60)
+        return ago(duration('format.duration.seconds', { value: seconds }));
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60)
+        return ago(duration('format.duration.minutes', { value: minutes }));
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) {
+        return ago(minutes % 60 > 0
+            ? duration('format.duration.hoursMinutes', { hours, minutes: minutes % 60 })
+            : duration('format.duration.hours', { value: hours }));
+    }
+    const days = Math.floor(hours / 24);
+    return ago(hours % 24 > 0
+        ? duration('format.duration.daysHours', { days, hours: hours % 24 })
+        : duration('format.duration.days', { value: days }));
+}
+//# sourceMappingURL=time.js.map

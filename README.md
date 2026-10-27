@@ -1,259 +1,310 @@
-# Claude HUD (中文优化版)
+# Claude HUD
 
-> **这是 [jarrodwatts/claude-hud](https://github.com/jarrodwatts/claude-hud) 的中文优化修改版**
+A Claude Code plugin that shows what's happening: context usage, rate limits, active tools, running agents, and todo progress, always visible below your input.
 
-Claude Code 插件，显示实时多行状态栏。展示上下文健康度、工具活动、代理状态和待办事项进度。
+[![License](https://img.shields.io/github/license/jarrodwatts/claude-hud?v=2)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/jarrodwatts/claude-hud)](https://github.com/jarrodwatts/claude-hud/stargazers)
 
-## 中文优化内容
+![Claude HUD in action](claude-hud-preview-5-2.png)
 
-本版本针对中文用户和智谱 AI 做了以下优化：
+> 🌐 English | [中文文档](README.zh.md)
 
-| 优化项 | 说明 |
-|--------|------|
-| **智谱配额支持** | 新增智谱 AI Token 和时间配额实时查询显示 |
-| **中文界面** | 状态栏标签使用中文（配额、时间、上下文等） |
-| **环境变量传递** | 修复了 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` 导致的令牌无法传递问题 |
-| **缓存优化** | 配额缓存时间延长至 5 分钟，减少 API 调用 |
+## Install
 
-### 配额显示效果
+Inside Claude Code, run:
 
 ```
-配额 token 12% (04-06 14:56) | 时间 10%
-```
-
-## 原作者项目
-
-- **GitHub**: [jarrodwatts/claude-hud](https://github.com/jarrodwatts/claude-hud)
-- 感谢原作者的出色工作
-
-## 安装步骤
-
-### 前置要求
-
-- Claude Code v1.0.80+
-- Node.js 18+ 或 Bun
-
-### 一键安装（推荐）
-
-在 Claude Code 中运行：
-
-```
-/plugin marketplace add binbin1213/claude-hud
+/plugin marketplace add jarrodwatts/claude-hud
 /plugin install claude-hud
+/reload-plugins
+/claude-hud:setup
 ```
 
-安装后**需要配置 `statusLine`** 才能显示配额信息。
+`/claude-hud:setup` points your status line at the HUD. Claude Code reloads settings on its own, so the HUD appears right away. To customize it, ask Claude or run `/claude-hud:configure`.
 
-### 智谱配额配置
+<details>
+<summary><strong>Prefer the terminal?</strong></summary>
 
-编辑 `~/.claude/settings.json`，添加/修改以下内容：
+```bash
+claude plugin marketplace add jarrodwatts/claude-hud
+claude plugin install claude-hud@claude-hud
+```
+
+Then run `/reload-plugins` and `/claude-hud:setup` inside a session.
+
+</details>
+
+<details>
+<summary><strong>Windows: setup says no JavaScript runtime was found</strong></summary>
+
+Install Node.js LTS (`winget install OpenJS.NodeJS.LTS`), restart your shell, and run `/claude-hud:setup` again.
+
+</details>
+
+**Updates:** Claude Code doesn't auto-update third-party plugins by default. To turn it on, run `/plugin`, open **Marketplaces**, select **claude-hud**, and choose **Enable auto-update**. If that option isn't there, or updates don't arrive, update by hand from the terminal:
+
+```bash
+claude plugin marketplace update claude-hud
+claude plugin update claude-hud@claude-hud
+```
+
+Then run `/reload-plugins` in any open session. You don't need to run setup again.
+
+## What You See
+
+The default is two lines. Labels default to Simplified Chinese; the sample below shows the English labels (`"language": "en"`).
+
+```
+[Opus] │ my-project git:(main*)
+Context █████░░░░░ 45% │ Usage ██░░░░░░░░ 25% (resets in 1h 30m)
+```
+
+- **Line 1**: model, a provider label when one is detected (`Bedrock`, `Vertex`, `MiniMax`), project path, and git branch.
+- **Line 2**: context used (green, then yellow, then red as it fills) and your subscriber rate limits.
+
+Optional lines, which you turn on with `/claude-hud:configure`:
+
+```
+◐ Edit: auth.ts | ✓ Read ×3 | ✓ Grep ×2        ← tools
+◐ explore [haiku]: Finding auth code (2m 15s)    ← agents
+▸ Fix authentication bug (2/5)                   ← todos
+```
+
+## How It Works
+
+Claude HUD is a [status line](https://code.claude.com/docs/en/statusline) command. Claude Code runs it with session data on stdin (model, context window, cost, rate limits, prompt cache) and shows what it prints. Some optional elements, such as the tools, agents, and todos lines, also read the session transcript. It needs no separate window or tmux and works in any terminal.
+
+## Configuration
+
+```
+/claude-hud:configure
+```
+
+The guided flow covers layout, activity lines, session info, usage, git, language, and a custom line. It previews the changes before saving and keeps every setting it doesn't ask about.
+
+Everything else lives in `~/.claude/plugins/claude-hud/config.json` (or under `$CLAUDE_CONFIG_DIR`). Invalid values fall back to their defaults.
+
+If several `CLAUDE_CONFIG_DIR`s share one `plugins/` directory, put per-directory settings in `$CLAUDE_CONFIG_DIR/claude-hud.json`. It uses the same shape, only needs the keys it changes, and is layered on top of the shared config:
+
+```json
+{ "display": { "customLine": "Work Team" } }
+```
+
+Labels default to Simplified Chinese; English (`en`) and Traditional Chinese (`zh-Hant`, alias `zh-TW`) are also available.
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `language` | `en` \| `zh` \| `zh-Hans` \| `zh-Hant` \| `zh-TW` | `zh-Hans` | HUD label language. Defaults to Simplified Chinese; use `en` for English and `zh-Hant` or `zh-TW` for Traditional Chinese. |
+| `lineLayout` | string | `expanded` | Layout: `expanded` (multi-line) or `compact` (single line) |
+| `showSeparators` | boolean | false | In `compact` layout, draw a rule between the session line and the activity lines |
+| `pathLevels` | 1-3 \| `full` | 1 | Directory levels to show in project path, or `full` to show the entire absolute path |
+| `maxWidth` | number \| `null` | `null` | Optional fallback width used only when terminal width detection fails completely |
+| `forceMaxWidth` | boolean | false | Always use `maxWidth` when it is set, even if terminal width detection returns a smaller value |
+| `elementOrder` | string[] | `["project","addedDirs","context","usage","promptCache","cacheHitRate","memory","environment","tools","skills","mcp","agents","todos","sessionTime"]` | Expanded-mode element order. Omit entries to hide them in expanded mode. Existing configs keep their explicit order until updated. `sessionTokens` isn't in the default order: add it to place the `display.showSessionTokens` summary like any other element, for example in a `display.mergeGroups` group with `project`. Left out, it stays on its own last line. `cost` works the same way: left out, the cost segment stays on the first line (where `projectLineOrder` can move it); added, it becomes its own element, for example `"context","usage","cost"` in `elementOrder` with `["context","usage","cost"]` in `display.mergeGroups` puts it beside context and usage. |
+| `projectLineOrder` | string[] | `[]` | Optional leading order of segments *within* the first line, in both layouts. Visibility stays with the `display.show*` flags, and omitted segments retain their existing renderer order. `model` covers provider + model + effort (plus the context bar in compact mode); `project` covers path + added dirs + git as one segment. Example: `["project","model"]` puts the project/git block before the model badge. |
+| `display.mergeGroups` | string[][] | `[["context","usage"]]` | Expanded-mode groups that should share a line when adjacent. Set `[]` to disable merged lines. |
+| `display.rightAlign` | string[] | `[]` | Starts a right-aligned suffix at the first listed element in a merged row, preserving `elementOrder` and padding the gap with spaces. Requires the anchor to be in a `display.mergeGroups` group that actually renders on one line. Ignored when the terminal width is unknown, the anchor is first, or there is no room for padding. Example: `["context"]` with a `["project","context","usage"]` group keeps project/git left and pins context + usage right. |
+| `gitStatus.enabled` | boolean | true | Show git branch in HUD |
+| `gitStatus.showDirty` | boolean | true | Show `*` for uncommitted changes |
+| `gitStatus.showAheadBehind` | boolean | false | Show `↑N ↓N` for ahead/behind remote |
+| `gitStatus.pushWarningThreshold` | number | 0 | Color the ahead count with the warning color at or above this unpushed-commit count (`0` disables it) |
+| `gitStatus.pushCriticalThreshold` | number | 0 | Color the ahead count with the critical color at or above this unpushed-commit count (`0` disables it) |
+| `gitStatus.showFileStats` | boolean | false | Show file change counts `!M +A ✘D ?U` |
+| `gitStatus.showWorktree` | boolean | false | In a linked git worktree, show its name after the branch, e.g. `git:(feat/x) ⎇ feat-x` |
+| `gitStatus.branchOverflow` | `truncate` \| `wrap` | `truncate` | Keep current truncation behavior or let the git block wrap onto its own line boundary when possible |
+| `jjStatus.enabled` | boolean | false | Opt in to jj (Jujutsu) status. When enabled and a real `.jj` directory is found, jj is used instead of git for that repo — never both |
+| `jjStatus.showDirty` | boolean | true | Show `*` when the working-copy commit differs from its parent |
+| `jjStatus.showConflicts` | boolean | true | Show a `!conflict` marker when the working-copy commit has an unresolved conflict |
+| `display.showModel` | boolean | true | Show model name `[Opus]` |
+| `display.showProject` | boolean | true | Show the project path |
+| `display.modelSource` | `stdin` \| `auto` \| `transcript` | `stdin` | Controls which source the model name comes from. `stdin` preserves the default behavior and always uses what Claude Code reports. `auto` opts into proxy redirect detection by using transcript models only for non-Claude models. `transcript` always uses the model from the API response. Transcript model values are terminal-sanitized and capped at 80 characters |
+| `display.modelFormat` | `full` \| `compact` \| `short` | `full` | `compact` drops a context-window suffix such as `(1M context)`; `short` also drops a leading `Claude ` |
+| `display.modelOverride` | string | `""` | Show this text instead of the model name (80 characters max) |
+| `display.showProvider` | boolean | false | Show the provider label *before* the model name, e.g. `[Bedrock \| Opus 4.6]`. Useful when a custom proxy serves identically-named models from different providers. When off, an auto-detected provider still trails the model as before |
+| `display.providerName` | string | `""` | Explicit provider label used with `display.showProvider`, e.g. for a custom proxy that can't be auto-detected. Falls back to the auto-detected provider (Bedrock/Vertex/MiniMax/Enterprise) when empty; capped at 40 chars |
+| `display.showAddedDirs` | boolean | true | Show extra workspace directories from `/add-dir` (e.g. `+sparkle +lib-foo`); empty array renders nothing. In both layouts at most 5 dirs render (overflow shown as `+N more`) and basenames are truncated to 24 chars with `…` |
+| `display.addedDirsLayout` | `inline` \| `line` | `inline` | `inline` puts dirs next to the project name with a `+name` prefix per dir; `line` renders them on a separate `Added dirs: name1, name2` line (no `+` prefix, comma-separated) |
+| `display.showContextBar` | boolean | true | Show visual context bar `████░░░░░░` |
+| `display.contextValue` | `percent` \| `tokens` \| `remaining` \| `both` | `percent` | Context display format (`45%`, `45k/200k`, `55%` remaining, or `45% (45k/200k)`) |
+| `display.autoCompactWindow` | number \| `null` | `null` | When set to a positive number such as `200000`, compute the context percentage against this auto-compact window instead of the full model context window, matching the `/context` figure. Leave unset or `null` to preserve default full-window behavior. |
+| `display.showConfigCounts` | boolean | false | Show CLAUDE.md, rules, MCPs, hooks counts |
+| `display.environmentThreshold` | number | 0 | Hide the config counts until their total reaches this number (0 = always show) |
+| `display.showCost` | boolean | false | Show the session cost Claude Code reports (`cost.total_cost_usd`) |
+| `display.showRoutedCost` | boolean | false | Also show cost for Bedrock and Vertex sessions, which `showCost` hides because they bill through the cloud provider. Requires `showCost` |
+| `display.showDailyCost` | boolean | false | Show today's cumulative spend across sessions as `Today $12.34`, accumulated from the native `cost.total_cost_usd` into a small per-day ledger in the plugin data directory. Resets at local midnight. Independent of `showCost` |
+| `display.showWeeklyCost` | boolean | false | Show spend since the weekly quota window opened as `Week $123.45`, from the same ledger as `showDailyCost`. Subscribers only: needs the 7-day usage window |
+| `display.showOutputStyle` | boolean | false | Show the current output style as `style: <name>` |
+| `display.showDuration` | boolean | false | Show how long the session has been running, e.g. `⏱️ 5m` |
+| `display.showSpeed` | boolean | false | Show the latest response's output speed `out: 42.1 tok/s` |
+| `display.showUsage` | boolean | true | Show Claude subscriber usage limits when available |
+| `display.usageValue` | `percent` \| `remaining` | `percent` | Usage display format (`25%` used, or `75%` remaining) |
+| `display.usageBarEnabled` | boolean | true | Display usage as visual bar instead of text |
+| `display.usageCompact` | boolean | false | Display usage in a shorter text form such as `5h: 25% (1h 30m)`; takes precedence over `display.usageBarEnabled` |
+| `display.showResetLabel` | boolean | true | Show the `resets in` prefix before usage countdowns |
+| `display.showModelScopedUsage` | boolean | true | Show the per-model weekly windows (`model_scoped`, e.g. Fable), whether they arrive on stdin or from the external usage snapshot. Set to `false` to render the usage line as if the payload carried none of them |
+| `display.usagePace` | boolean | false | Colour usage windows amber or red, marked `▲`, when they are on track to run out before they reset |
+| `display.timeFormat` | `relative` \| `absolute` \| `both` \| `elapsed` \| `elapsedAndAbsolute` | `relative` | How usage-window time is shown: countdown only (`resets in 2h 30m`), wall-clock reset (`resets at 14:30`), both, elapsed window percentage (`53% elapsed`), or elapsed plus wall-clock reset |
+| `display.hourCycle` | `auto` \| `h11` \| `h12` \| `h23` \| `h24` | `auto` | Hour cycle for wall-clock reset times (`absolute`/`both`/`elapsedAndAbsolute` modes). `auto` defers to the system locale; `h23` forces 24-hour time (`14:30`) regardless of locale |
+| `display.showClockSeconds` | boolean | false | Show seconds in wall-clock reset times, e.g. `at 14:30:07` |
+| `display.usageThreshold` | 0-100 | 0 | Hide the usage display until either window reaches this percentage (0 = always show) |
+| `display.sevenDayThreshold` | 0-100 | 80 | Show 7-day usage when >= threshold (0 = always) |
+| `display.externalUsagePath` | string | `""` | Optional absolute path to a local usage snapshot file. A leading `~` and `${VAR}` are expanded. Relative paths are ignored. When stdin `rate_limits` are present, `balance_label` is appended and `model_scoped` windows fill in when stdin lacks them; when stdin windows are missing, valid usage windows can be used as a fallback |
+| `display.externalUsageWritePath` | string | `""` | Optional absolute `.json` path in an existing directory. A leading `~` and `${VAR}` are expanded. When stdin `rate_limits` exists, ClaudeHUD writes a private snapshot for other local tools. Relative paths, non-json files, and missing parent directories are ignored |
+| `display.externalUsageFreshnessMs` | number | `300000` | Maximum allowed age for the external usage snapshot before it is ignored |
+| `display.showTokenBreakdown` | boolean | true | Show token details at high context (85%+) |
+| `display.contextWarningThreshold` | 0-100 | 70 | Context percentage at which the context bar turns the warning colour |
+| `display.contextCriticalThreshold` | 0-100 | 85 | Context percentage at which the context bar turns the critical colour and shows the token breakdown |
+| `display.showTools` | boolean | false | Show tools activity line |
+| `display.showSkills` | boolean | false | Show active Skills detected from `Skill` tool invocations |
+| `display.showMcp` | boolean | false | Show active MCP servers detected from `mcp__server__tool` invocations |
+| `display.toolNameMaxLength` | number | `0` | Maximum displayed tool-name length. `0` keeps full names; MCP names may shorten to their final segment when truncating |
+| `display.toolsMaxVisible` | number | `4` | Maximum completed tools shown on the tools line. `0` means unlimited |
+| `display.skillsMaxVisible` | number | `4` | Maximum skill names shown on the skills line before `+N more`. `0` means unlimited |
+| `display.showAgents` | boolean | false | Show agents activity line |
+| `display.showTodos` | boolean | false | Show todos progress line |
+| `display.showSessionName` | boolean | false | Show the session name: the `/rename` name, or the title Claude Code generated |
+| `display.showSessionTokens` | boolean | false | Show the session's cumulative token totals, e.g. `Tokens 262k (in: 6k, out: 2k, cache: 254k)` |
+| `display.showAuth` | boolean | false | Show the auth method (subscription plan) of the current login as its own segment at the end of the first line, e.g. `Claude Max 20x`. Derived from the `oauthAccount` block in `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json` when the config directory is overridden); shows `API Key` when there is no OAuth login but `ANTHROPIC_API_KEY` is set |
+| `display.showAuthUser` | boolean | false | Show the logged-in account (email local part, falling back to profile display name) next to the auth method |
+| `display.authUserLength` | number | `8` | Maximum characters of the account name to display before truncating with `…`. `0` shows the full name |
+| `display.showAdvisor` | boolean | false | Inline the model configured via Claude Code's `/advisor` on the project line, e.g. `Advisor: Opus 4.7`. Read from the `advisorModel` field that Claude Code stamps on each assistant transcript record; sanitised and capped at 64 chars before rendering |
+| `display.advisorOverride` | string | `""` | Optional manual override for the displayed advisor label. When non-empty, replaces transcript-driven detection. Also sanitised and capped at 64 chars |
+| `display.showSessionStartDate` | boolean | false | Show the transcript session start timestamp |
+| `display.showLastResponseAt` | boolean | false | Show how long ago the last assistant response was written |
+| `display.showCompactions` | boolean | false | Show how many context compactions (manual `/compact` or auto) have occurred this session, counted from transcript `compact_boundary` entries, e.g. `Compactions: 2`. Hidden until the first compaction |
+| `display.showEffortLevel` | boolean | false | Show the current reasoning effort in the model badge. Ultracode renders as `ultracode(xhigh)`, detected from the session transcript so it tracks `/effort` changes made at runtime |
+| `display.effortFormat` | `full` \| `symbol` \| `text` | `full` | How the effort renders when `display.showEffortLevel` is on: symbol and level text (`◑ high`), symbol only (`◑`), or level text only (`high`). Ultracode keeps the full `◕ ultracode(xhigh)` form under `symbol` so the marker is not lost, and levels without a known symbol fall back to the level text |
+| `display.showAgentEffort` | boolean | false | With `display.showAgents`, show each subagent's reasoning effort next to its model, e.g. `◐ code-reviewer [haiku-4.5 ◔ medium]`, in `display.effortFormat`. Read from the subagent's own transcript, so it appears once Claude Code has recorded the agent's id (at launch for background agents, at the end otherwise) and its first reply |
+| `display.showClaudeCodeVersion` | boolean | false | Show the running Claude Code version, e.g. `CC v2.1.81` |
+| `display.showMemoryUsage` | boolean | false | Show an approximate system RAM usage line in expanded layout |
+| `display.showPromptCache` | boolean | false | Show when the main conversation's prompt cache expires |
+| `display.showCacheHitRate` | boolean | false | Show the session's prompt-cache hit rate as `Cache hit X%` |
+| `display.customLine` | string | `""` | Custom text shown on the first line (80 characters max) |
+| `display.customLinePosition` | `first` \| `last` | `last` | Put the custom text at the start or the end of the first line |
+| `colors.context` | color value | `green` | Base color for the context bar and context percentage |
+| `colors.usage` | color value | `brightBlue` | Base color for usage bars and percentages below warning thresholds |
+| `colors.warning` | color value | `yellow` | Warning color for context thresholds and usage warning text |
+| `colors.usageWarning` | color value | `brightMagenta` | Warning color for usage bars and percentages near their threshold |
+| `colors.critical` | color value | `red` | Critical color for limit-reached states and critical thresholds |
+| `colors.model` | color value | `cyan` | Color for the model badge such as `[Opus]` |
+| `colors.project` | color value | `yellow` | Color for the project path |
+| `colors.git` | color value | `magenta` | Color for git wrapper text such as `git:(` and `)` |
+| `colors.gitBranch` | color value | `cyan` | Color for the git branch and branch status text |
+| `colors.label` | color value | `dim` | Color for labels and secondary metadata such as `Context`, `Usage`, counts, and progress text |
+| `colors.custom` | color value | `208` | Color for the optional custom line |
+| `colors.barFilled` | string | `█` | Character used for the filled portion of progress bars |
+| `colors.barEmpty` | string | `░` | Character used for the empty portion of progress bars |
+
+Colors accept a name (`dim`, `red`, `green`, `yellow`, `magenta`, `cyan`, `brightBlue`, `brightMagenta`), a 256-color number (`0-255`), or hex (`#rrggbb`). `colors.barFilled` and `colors.barEmpty` take a single visible character; wide characters such as emoji may affect bar alignment in some terminals.
+
+### Usage Limits
+
+Usage shows whenever Claude Code sends subscriber `rate_limits`, which is after the first response of a session. API-key, Bedrock, and Vertex sessions have no subscriber limits, so it stays hidden. The 7-day window appears once it passes `display.sevenDayThreshold`:
+
+```
+Context █████░░░░░ 45% │ Usage ██░░░░░░░░ 25% (resets in 1h 30m) | Weekly █████████░ 85% (resets in 1d)
+```
+
+With `display.usagePace`, a window you're using faster than it refills turns amber (on track to end at 90% or more) or red (on track to run out first) and gets a `▲`. Windows under 10% used stay neutral.
+
+**External snapshot.** `display.externalUsagePath` reads a local JSON file. Its windows fill in when stdin has none, and its `balance_label` or `model_scoped` windows (for example a per-model weekly quota) add to stdin's. The file must be absolute and fresher than `display.externalUsageFreshnessMs`:
 
 ```json
 {
-  "statusLine": {
-    "type": "command",
-    "command": "\"/Users/[你的用户名]/.claude/plugins/marketplaces/claude-hud/run-hud.sh\""
-  }
+  "updated_at": "2026-04-20T12:00:00.000Z",
+  "five_hour": { "used_percentage": 42, "resets_at": "2026-04-20T15:00:00.000Z" },
+  "seven_day": { "used_percentage": 84, "resets_at": "2026-04-27T12:00:00.000Z" },
+  "balance_label": "$12.50",
+  "model_scoped": [{ "display_name": "Fable", "utilization": 89, "resets_at": "2026-04-27T11:00:00Z" }]
 }
 ```
 
-**注意**: 将 `[你的用户名]` 替换为你的实际用户名。
+`display.externalUsageWritePath` does the reverse: it writes stdin's rate limits to a private `.json` file in an existing directory for other tools to read.
 
-wrapper 脚本会自动从 `settings.json` 读取 `ANTHROPIC_AUTH_TOKEN` 用于配额查询。
+### Cost
 
-### 手动安装
+`display.showCost` shows Claude Code's own session cost, computed at list price or from your `modelPricing` table. Bedrock and Vertex bill through the cloud provider, so their cost is hidden unless `display.showRoutedCost` is also set.
 
-如果一键安装不可用，编辑 `~/.claude/settings.json`，添加：
+`display.showDailyCost` adds today's spend across sessions (`Today $12.34`). It is kept in a small ledger in the plugin data directory, resets at local midnight, and counts a session from the first render that sees it. `display.showWeeklyCost` uses the same ledger from the start of the 7-day quota window, so it needs a subscriber session.
 
-```json
-"statusLine": {
-  "type": "command",
-  "command": "bash -c 'plugin_dir=$(ls -d \"$HOME\"/.claude/plugins/cache/claude-hud/claude-hud/*/ 2>/dev/null | head -1); exec node \"$plugin_dir/dist/index.js\"'"
-}
-```
+### Prompt Cache
 
-## 配置说明
+`display.showPromptCache` shows when the main conversation's prompt cache goes cold, such as `Cache ⏱ until 14:30`, or `expired`. It shows a clock time rather than a countdown because the status line doesn't repaint between turns, which is exactly when the cache drains; a clock time stays correct however old the render is. `display.showCacheHitRate` shows the share of input tokens read from the cache.
 
-配置文件位置：`~/.claude/plugins/claude-hud/config.json`
+### Jujutsu (jj)
 
-### 完整配置示例
+Set `jjStatus.enabled` to `true` to show jj status, such as `jj:(mybookmark*)` or `jj:(wrulwzyw !conflict)`, instead of git in a directory with a `.jj` repository. The HUD runs jj read-only without snapshotting the working copy, so the dirty marker reflects jj's last snapshot. Ahead/behind and file stats are git-only.
+
+### Example
 
 ```json
 {
   "lineLayout": "expanded",
-  "showSeparators": false,
-  "pathLevels": 1,
-  "elementOrder": ["project", "context", "usage", "environment", "tools", "agents", "todos"],
-  "gitStatus": {
-    "enabled": true,
-    "showDirty": true,
-    "showAheadBehind": true,
-    "showFileStats": true
-  },
-  "display": {
-    "showModel": true,
-    "showProject": true,
-    "showContextBar": true,
-    "contextValue": "percent",
-    "showConfigCounts": true,
-    "showDuration": true,
-    "showSpeed": true,
-    "showTokenBreakdown": true,
-    "showUsage": true,
-    "usageBarEnabled": true,
-    "showTools": true,
-    "showAgents": true,
-    "showTodos": true,
-    "showSessionName": true,
-    "autocompactBuffer": "enabled",
-    "usageThreshold": 0,
-    "sevenDayThreshold": 80,
-    "environmentThreshold": 0
-  },
-  "usage": {
-    "cacheTtlSeconds": 300,
-    "failureCacheTtlSeconds": 30
-  },
-  "colors": {
-    "context": "green",
-    "usage": "brightBlue",
-    "warning": "yellow",
-    "usageWarning": "brightMagenta",
-    "critical": "red"
-  }
-}
-```
-
-### 配置项说明
-
-#### 布局设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `lineLayout` | `"compact"` \| `"expanded"` | `"expanded"` | 布局模式。compact 单行紧凑，expanded 多行展开 |
-| `showSeparators` | boolean | `false` | 是否显示分隔线 |
-| `pathLevels` | `1` \| `2` \| `3` | `1` | 项目路径显示层级 |
-| `elementOrder` | string[] | 见上方 | 元素显示顺序 |
-
-#### Git 状态设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `gitStatus.enabled` | boolean | `true` | 是否显示 Git 状态 |
-| `gitStatus.showDirty` | boolean | `true` | 显示是否有未提交更改（*标记） |
-| `gitStatus.showAheadBehind` | boolean | `true` | 显示领先/落后远程的提交数 |
-| `gitStatus.showFileStats` | boolean | `true` | 显示文件变更统计 |
-
-#### 显示设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `display.showModel` | boolean | `true` | 显示模型名称 |
-| `display.showProject` | boolean | `true` | 显示项目路径 |
-| `display.showContextBar` | boolean | `true` | 显示上下文进度条 |
-| `display.contextValue` | `"percent"` \| `"tokens"` \| `"remaining"` | `"percent"` | 上下文值显示方式 |
-| `display.showConfigCounts` | boolean | `true` | 显示配置文件数量 |
-| `display.showDuration` | boolean | `true` | 显示会话时长 |
-| `display.showSpeed` | boolean | `true` | 显示输出速度 |
-| `display.showTokenBreakdown` | boolean | `true` | 高上下文时显示 Token 明细 |
-| `display.showUsage` | boolean | `true` | 显示用量信息 |
-| `display.usageBarEnabled` | boolean | `true` | 显示用量进度条 |
-| `display.showTools` | boolean | `true` | 显示工具活动 |
-| `display.showAgents` | boolean | `true` | 显示代理活动 |
-| `display.showTodos` | boolean | `true` | 显示待办事项 |
-| `display.showSessionName` | boolean | `true` | 显示会话名称 |
-| `display.autocompactBuffer` | `"enabled"` \| `"disabled"` | `"enabled"` | 自动压缩缓冲计算 |
-| `display.usageThreshold` | number (0-100) | `0` | 用量显示阈值 |
-| `display.sevenDayThreshold` | number (0-100) | `80` | 7天用量显示阈值 |
-| `display.environmentThreshold` | number (0-100) | `0` | 环境配置显示阈值 |
-
-#### 用量缓存设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `usage.cacheTtlSeconds` | number | `300` | 成功请求缓存时间（秒） |
-| `usage.failureCacheTtlSeconds` | number | `30` | 失败请求缓存时间（秒） |
-
-#### 颜色设置
-
-可用颜色：`red`、`green`、`yellow`、`magenta`、`cyan`、`brightBlue`、`brightMagenta`
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `colors.context` | `"green"` | 上下文进度条颜色 |
-| `colors.usage` | `"brightBlue"` | 用量进度条颜色 |
-| `colors.warning` | `"yellow"` | 警告状态颜色 |
-| `colors.usageWarning` | `"brightMagenta"` | 用量警告颜色 |
-| `colors.critical` | `"red"` | 临界状态颜色 |
-
-### 常用配置示例
-
-#### 显示所有信息
-
-```json
-{
+  "pathLevels": 2,
+  "gitStatus": { "showAheadBehind": true, "showFileStats": true },
   "display": {
     "showTools": true,
     "showAgents": true,
     "showTodos": true,
     "showDuration": true,
-    "showSessionName": true
-  }
-}
-```
-
-#### 紧凑单行模式
-
-```json
-{
-  "lineLayout": "compact",
-  "showSeparators": true
-}
-```
-
-#### 只显示核心信息
-
-```json
-{
-  "display": {
-    "showModel": true,
-    "showContextBar": true,
-    "showUsage": false,
-    "showTools": false,
-    "showAgents": false,
-    "showTodos": false
+    "showCost": true
   },
-  "gitStatus": {
-    "enabled": false
-  }
+  "colors": { "context": "cyan", "custom": "#FF6600" }
 }
 ```
 
-#### 自定义颜色主题
+### Auto-Refresh
 
-```json
-{
-  "colors": {
-    "context": "cyan",
-    "usage": "magenta",
-    "warning": "yellow",
-    "usageWarning": "brightMagenta",
-    "critical": "red"
-  }
-}
-```
+Claude Code re-runs the status line after each message, `/compact`, a permission or vim mode change, a rate-limit reset, and a prompt-cache expiry. To keep countdowns and durations ticking while a session is idle, add `refreshInterval` (seconds) to the `statusLine` entry in `~/.claude/settings.json`.
 
-## 开发
+### Turning It Off for a Session
 
 ```bash
-git clone https://github.com/binbin1213/claude-hud
-cd claude-hud
-npm ci && npm run build
-npm test
+CLAUDE_HUD_DISABLE=1 claude
 ```
 
-## 许可证
+Any value other than `0`, `false`, `off`, or `no` blanks the HUD for that session without touching `settings.json`.
 
-MIT — 详见 [LICENSE](LICENSE)
+## Security
 
-本修改版遵循原项目的 MIT 许可证。
+Claude HUD is local-only. It makes no network requests, never reads credentials, and calls no undocumented APIs. It reads Claude Code's stdin, the session transcript, Claude configuration files, and git or jj metadata for the current directory. Its only writes are small state files (output speed and the cost ledger) under `~/.claude/plugins/claude-hud`, with private permissions.
+
+`--extra-cmd` runs a shell command on every refresh and puts its output on the first line. It is ignored unless `CLAUDE_HUD_ALLOW_EXTRA_CMD=1` is set in the HUD's environment. Treat it as arbitrary code execution and never use a command from an untrusted source.
+
+## Troubleshooting
+
+**The HUD doesn't appear.** Send a message, because the status line renders after an interaction. Check that `CLAUDE_HUD_DISABLE` isn't set in your shell. Run `/claude-hud:setup` again if your Node or Bun path changed, for example after an nvm or mise upgrade.
+
+**Config isn't applying.** Check the JSON for syntax errors: an invalid file falls back to the defaults. Check that values are in range; the options table lists them.
+
+**Usage is missing.** Usage needs a Claude subscriber login and appears after the first response. Check `display.showUsage`.
+
+**Git or jj status is missing.** Check that you're inside a repository and that `gitStatus.enabled` (or `jjStatus.enabled` with `jj` on `PATH`) is on.
+
+**An activity line is missing.** Tools, agents, todos, skills, and MCP lines are off by default and only show when there's activity.
+
+## Requirements
+
+- Claude Code v2.1.260 or later
+- macOS or Linux: Node.js 18+ or Bun
+- Windows: Node.js 18+
+
+## Development
+
+```bash
+git clone https://github.com/jarrodwatts/claude-hud
+cd claude-hud
+npm ci && npm test
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=jarrodwatts/claude-hud&type=Date)](https://star-history.com/#jarrodwatts/claude-hud&Date)

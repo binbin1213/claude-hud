@@ -1,1192 +1,452 @@
-import { test } from 'node:test';
+// Behaviour the golden harness can't pin cheaply: visibility rules, fallbacks,
+// clock-relative activity, and sanitization. Every case renders through renderLines.
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { render } from '../dist/render/index.js';
-import { renderSessionLine } from '../dist/render/session-line.js';
-import { renderProjectLine } from '../dist/render/lines/project.js';
-import { renderToolsLine } from '../dist/render/tools-line.js';
-import { renderAgentsLine } from '../dist/render/agents-line.js';
-import { renderTodosLine } from '../dist/render/todos-line.js';
-import { renderUsageLine } from '../dist/render/lines/usage.js';
-import { getContextColor, getQuotaColor } from '../dist/render/colors.js';
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { renderLines } from '../dist/render/index.js';
+import { mergeConfig } from '../dist/config.js';
+import { setLanguage } from '../dist/i18n/index.js';
+import { textWidth } from '../dist/render/ansi.js';
 
-function stripAnsi(str) {
-  // eslint-disable-next-line no-control-regex
-  return str.replace(/\x1b\[[0-9;]*m/g, '');
-}
+const NOW = new Date(2026, 9, 1, 12, 0).getTime();
+const SECOND = 1000;
+const MINUTE = 60 * SECOND;
+const HOUR = 60 * MINUTE;
+const RED = '\x1b[31m';
+const YELLOW = '\x1b[33m';
+const BRIGHT_MAGENTA = '\x1b[95m';
 
-function baseContext() {
+const plain = (s) => s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+const ago = (ms) => new Date(NOW - ms);
+const from = (ms) => new Date(NOW + ms);
+
+function ctx({ config = {}, stdin = {}, transcript = {}, ...rest } = {}) {
   return {
     stdin: {
       model: { display_name: 'Opus' },
-      context_window: {
-        context_window_size: 200000,
-        current_usage: {
-          input_tokens: 10000,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        },
-      },
+      cwd: '/home/u/dev/my-project',
+      context_window: { context_window_size: 200000, used_percentage: 45, current_usage: { input_tokens: 90000 } },
+      ...stdin,
     },
-    transcript: { tools: [], agents: [], todos: [] },
+    transcript: { tools: [], agents: [], todos: [], ...transcript },
     claudeMdCount: 0,
     rulesCount: 0,
     mcpCount: 0,
     hooksCount: 0,
-    sessionDuration: '',
+    costTotals: null,
+    outputSpeed: null,
     gitStatus: null,
     usageData: null,
-    config: {
-      lineLayout: 'compact',
-      showSeparators: false,
-      pathLevels: 1,
-      elementOrder: ['project', 'context', 'usage', 'environment', 'tools', 'agents', 'todos'],
-      gitStatus: { enabled: true, showDirty: true, showAheadBehind: false, showFileStats: false },
-      display: { showModel: true, showProject: true, showContextBar: true, contextValue: 'percent', showConfigCounts: true, showDuration: true, showSpeed: false, showTokenBreakdown: true, showUsage: true, usageBarEnabled: false, showTools: true, showAgents: true, showTodos: true, showSessionName: false, autocompactBuffer: 'enabled', usageThreshold: 0, sevenDayThreshold: 80, environmentThreshold: 0 },
-      colors: {
-        context: 'green',
-        usage: 'brightBlue',
-        warning: 'yellow',
-        usageWarning: 'brightMagenta',
-        critical: 'red',
-      },
-    },
+    memoryUsage: null,
+    extraLabel: null,
+    ...rest,
+    config: mergeConfig(config),
   };
 }
 
-function captureRenderLines(ctx) {
-  const logs = [];
-  const originalLog = console.log;
-  console.log = line => logs.push(stripAnsi(line));
-  try {
-    render(ctx);
-  } finally {
-    console.log = originalLog;
-  }
-  return logs;
-}
-
-test('renderSessionLine adds token breakdown when context is high', () => {
-  const ctx = baseContext();
-  // For 90%: (tokens + 33000) / 200000 = 0.9 → tokens = 147000
-  ctx.stdin.context_window.current_usage.input_tokens = 147000;
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('输入:'), 'expected token breakdown');
-  assert.ok(line.includes('缓存:'), 'expected cache breakdown');
-});
-
-test('renderSessionLine includes duration and formats large tokens', () => {
-  const ctx = baseContext();
-  ctx.sessionDuration = '1m';
-  // Use 1M context, need 85%+ to show breakdown
-  // For 85%: (tokens + 165000) / 1000000 = 0.85 → tokens = 685000
-  ctx.stdin.context_window.context_window_size = 1000000;
-  ctx.stdin.context_window.current_usage.input_tokens = 685000;
-  ctx.stdin.context_window.current_usage.cache_read_input_tokens = 1500;
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('⏱️'));
-  assert.ok(line.includes('685k') || line.includes('685.0k'), 'expected large input token display');
-  assert.ok(line.includes('2k'), 'expected cache token display');
-});
-
-test('renderSessionLine handles missing input tokens and cache creation usage', () => {
-  const ctx = baseContext();
-  // For 90%: (tokens + 33000) / 200000 = 0.9 → tokens = 147000 (all from cache)
-  ctx.stdin.context_window.context_window_size = 200000;
-  ctx.stdin.context_window.current_usage = {
-    cache_creation_input_tokens: 147000,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('90%'));
-  assert.ok(line.includes('输入: 0'));
-});
-
-test('renderSessionLine handles missing cache token fields', () => {
-  const ctx = baseContext();
-  // For 90%: (tokens + 33000) / 200000 = 0.9 → tokens = 147000
-  ctx.stdin.context_window.context_window_size = 200000;
-  ctx.stdin.context_window.current_usage = {
-    input_tokens: 147000,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('缓存: 0'));
-});
-
-test('getContextColor returns yellow for warning threshold', () => {
-  assert.equal(getContextColor(70), '\x1b[33m');
-});
-
-test('getContextColor and getQuotaColor respect custom semantic overrides', () => {
-  const colors = {
-    context: 'cyan',
-    usage: 'magenta',
-    warning: 'brightBlue',
-    usageWarning: 'yellow',
-    critical: 'red',
-  };
-
-  assert.equal(getContextColor(10, colors), '\x1b[36m');
-  assert.equal(getContextColor(70, colors), '\x1b[94m');
-  assert.equal(getQuotaColor(25, colors), '\x1b[35m');
-  assert.equal(getQuotaColor(80, colors), '\x1b[33m');
-});
-
-test('renderSessionLine includes config counts when present', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.claudeMdCount = 1;
-  ctx.rulesCount = 2;
-  ctx.mcpCount = 3;
-  ctx.hooksCount = 4;
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('CLAUDE.md'));
-  assert.ok(line.includes('规则'));
-  assert.ok(line.includes('MCP'));
-  assert.ok(line.includes('钩子'));
-});
-
-test('renderSessionLine displays project name from POSIX cwd', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/Users/jarrod/my-project';
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('my-project'));
-  assert.ok(!line.includes('/Users/jarrod'));
-});
-
-test('renderSessionLine displays project name from Windows cwd', { skip: process.platform !== 'win32' }, () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = 'C:\\Users\\jarrod\\my-project';
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('my-project'));
-  assert.ok(!line.includes('C:\\'));
-});
-
-test('renderSessionLine handles root path gracefully', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/';
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('[Opus]'));
-});
-
-test('renderSessionLine supports token-based context display', () => {
-  const ctx = baseContext();
-  ctx.config.display.contextValue = 'tokens';
-  ctx.stdin.context_window.context_window_size = 200000;
-  ctx.stdin.context_window.current_usage.input_tokens = 12345;
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('12k/200k'), 'should include token counts');
-});
-
-test('renderSessionLine supports remaining-based context display', () => {
-  const ctx = baseContext();
-  ctx.config.display.contextValue = 'remaining';
-  ctx.stdin.context_window.context_window_size = 200000;
-  ctx.stdin.context_window.current_usage.input_tokens = 12345;
-  const line = renderSessionLine(ctx);
-  // 12345/200k = 6.17% raw, scale ≈ 0.026, buffer ≈ 858 → 7% buffered → 93% remaining
-  assert.ok(line.includes('93%'), 'should include remaining percentage');
-});
-
-test('render expanded layout supports remaining-based context display', () => {
-  const ctx = baseContext();
-  ctx.config.lineLayout = 'expanded';
-  ctx.config.display.contextValue = 'remaining';
-  ctx.stdin.context_window.context_window_size = 200000;
-  ctx.stdin.context_window.current_usage.input_tokens = 12345;
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (line) => logs.push(line);
-  try {
-    render(ctx);
-  } finally {
-    console.log = originalLog;
-  }
-
-  // 12345/200k = 6.17% raw, scale ≈ 0.026, buffer ≈ 858 → 7% buffered → 93% remaining
-  assert.ok(logs.some(line => line.includes('上下文') && line.includes('93%')), 'expected remaining percentage on context line');
-});
-
-test('renderSessionLine omits project name when cwd is undefined', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = undefined;
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('[Opus]'));
-});
-
-test('renderSessionLine includes session name when showSessionName is true', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.transcript.sessionName = 'Renamed Session';
-  ctx.config.display.showSessionName = true;
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('Renamed Session'));
-});
-
-test('renderSessionLine hides session name by default', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.transcript.sessionName = 'Renamed Session';
-  const line = renderSessionLine(ctx);
-  assert.ok(!line.includes('Renamed Session'));
-});
-
-test('renderProjectLine includes session name when showSessionName is true', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.transcript.sessionName = 'Renamed Session';
-  ctx.config.display.showSessionName = true;
-  const line = renderProjectLine(ctx);
-  assert.ok(line?.includes('Renamed Session'));
-});
-
-test('renderProjectLine hides session name by default', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.transcript.sessionName = 'Renamed Session';
-  const line = renderProjectLine(ctx);
-  assert.ok(!line?.includes('Renamed Session'));
-});
-
-test('renderSessionLine omits project name when showProject is false', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/Users/jarrod/my-project';
-  ctx.gitStatus = { branch: 'main', isDirty: true, ahead: 0, behind: 0 };
-  ctx.config.display.showProject = false;
-  const line = renderSessionLine(ctx);
-  assert.ok(!line.includes('my-project'), 'should not include project name when showProject is false');
-  assert.ok(line.includes('git:('), 'should still include git status when showProject is false');
-});
-
-test('renderProjectLine keeps git status when showProject is false', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/Users/jarrod/my-project';
-  ctx.gitStatus = { branch: 'main', isDirty: true, ahead: 0, behind: 0 };
-  ctx.config.display.showProject = false;
-  const line = renderProjectLine(ctx);
-  assert.ok(line?.includes('git:('), 'should still include git status');
-  assert.ok(!line?.includes('my-project'), 'should hide project path');
-});
-
-test('renderSessionLine displays git branch when present', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.gitStatus = { branch: 'main', isDirty: false, ahead: 0, behind: 0 };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('git:('));
-  assert.ok(line.includes('main'));
-});
-
-test('renderSessionLine omits git branch when null', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.gitStatus = null;
-  const line = renderSessionLine(ctx);
-  assert.ok(!line.includes('git:('));
-});
-
-test('renderSessionLine displays branch with slashes', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.gitStatus = { branch: 'feature/add-auth', isDirty: false, ahead: 0, behind: 0 };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('git:('));
-  assert.ok(line.includes('feature/add-auth'));
-});
-
-test('renderToolsLine renders running and completed tools', () => {
-  const ctx = baseContext();
-  ctx.transcript.tools = [
-    {
-      id: 'tool-1',
-      name: 'Read',
-      status: 'completed',
-      startTime: new Date(0),
-      endTime: new Date(0),
-      duration: 0,
-    },
-    {
-      id: 'tool-2',
-      name: 'Edit',
-      target: '/tmp/very/long/path/to/authentication.ts',
-      status: 'running',
-      startTime: new Date(0),
-    },
-  ];
-
-  const line = renderToolsLine(ctx);
-  assert.ok(line?.includes('Read'));
-  assert.ok(line?.includes('Edit'));
-  assert.ok(line?.includes('.../authentication.ts'));
-});
-
-test('renderToolsLine truncates long filenames', () => {
-  const ctx = baseContext();
-  ctx.transcript.tools = [
-    {
-      id: 'tool-1',
-      name: 'Edit',
-      target: '/tmp/this-is-a-very-very-long-filename.ts',
-      status: 'running',
-      startTime: new Date(0),
-    },
-  ];
-
-  const line = renderToolsLine(ctx);
-  assert.ok(line?.includes('...'));
-  assert.ok(!line?.includes('/tmp/'));
-});
-
-test('renderToolsLine handles trailing slash paths', () => {
-  const ctx = baseContext();
-  ctx.transcript.tools = [
-    {
-      id: 'tool-1',
-      name: 'Read',
-      target: '/tmp/very/long/path/with/trailing/',
-      status: 'running',
-      startTime: new Date(0),
-    },
-  ];
-
-  const line = renderToolsLine(ctx);
-  assert.ok(line?.includes('...'));
-});
-
-test('renderToolsLine preserves short targets and handles missing targets', () => {
-  const ctx = baseContext();
-  ctx.transcript.tools = [
-    {
-      id: 'tool-1',
-      name: 'Read',
-      target: 'short.txt',
-      status: 'running',
-      startTime: new Date(0),
-    },
-    {
-      id: 'tool-2',
-      name: 'Write',
-      status: 'running',
-      startTime: new Date(0),
-    },
-  ];
-
-  const line = renderToolsLine(ctx);
-  assert.ok(line?.includes('short.txt'));
-  assert.ok(line?.includes('Write'));
-});
-
-test('renderToolsLine returns null when tools are unrecognized', () => {
-  const ctx = baseContext();
-  ctx.transcript.tools = [
-    {
-      id: 'tool-1',
-      name: 'WeirdTool',
-      status: 'unknown',
-      startTime: new Date(0),
-    },
-  ];
-
-  assert.equal(renderToolsLine(ctx), null);
-});
-
-test('renderAgentsLine returns null when no agents exist', () => {
-  const ctx = baseContext();
-  assert.equal(renderAgentsLine(ctx), null);
-});
-
-test('renderAgentsLine renders completed agents', () => {
-  const ctx = baseContext();
-  ctx.transcript.agents = [
-    {
-      id: 'agent-1',
-      type: 'explore',
-      model: 'haiku',
-      description: 'Finding auth code',
-      status: 'completed',
-      startTime: new Date(0),
-      endTime: new Date(0),
-      elapsed: 0,
-    },
-  ];
-
-  const line = renderAgentsLine(ctx);
-  assert.ok(line?.includes('explore'));
-  assert.ok(line?.includes('haiku'));
-});
-
-test('renderAgentsLine truncates long descriptions and formats elapsed time', () => {
-  const ctx = baseContext();
-  ctx.transcript.agents = [
-    {
-      id: 'agent-1',
-      type: 'explore',
-      model: 'haiku',
-      description: 'A very long description that should be truncated in the HUD output',
-      status: 'completed',
-      startTime: new Date(0),
-      endTime: new Date(1500),
-    },
-    {
-      id: 'agent-2',
-      type: 'analyze',
-      status: 'completed',
-      startTime: new Date(0),
-      endTime: new Date(65000),
-    },
-  ];
-
-  const line = renderAgentsLine(ctx);
-  assert.ok(line?.includes('...'));
-  assert.ok(line?.includes('2s'));
-  assert.ok(line?.includes('1m'));
-});
-
-test('renderAgentsLine renders running agents with live elapsed time', () => {
-  const ctx = baseContext();
-  const originalNow = Date.now;
-  Date.now = () => 2000;
-
-  try {
-    ctx.transcript.agents = [
-      {
-        id: 'agent-1',
-        type: 'plan',
-        status: 'running',
-        startTime: new Date(0),
-      },
-    ];
-
-    const line = renderAgentsLine(ctx);
-    assert.ok(line?.includes('◐'));
-    assert.ok(line?.includes('2s'));
-  } finally {
-    Date.now = originalNow;
-  }
-});
-test('renderTodosLine handles in-progress and completed-only cases', () => {
-  const ctx = baseContext();
-  ctx.transcript.todos = [
-    { content: 'First task', status: 'completed' },
-    { content: 'Second task', status: 'in_progress' },
-  ];
-  assert.ok(renderTodosLine(ctx)?.includes('Second task'));
-
-  ctx.transcript.todos = [{ content: 'First task', status: 'completed' }];
-  assert.ok(renderTodosLine(ctx)?.includes('所有任务完成'));
-});
-
-test('renderTodosLine returns null when no todos are in progress', () => {
-  const ctx = baseContext();
-  ctx.transcript.todos = [
-    { content: 'First task', status: 'completed' },
-    { content: 'Second task', status: 'pending' },
-  ];
-  assert.equal(renderTodosLine(ctx), null);
-});
-
-test('renderTodosLine truncates long todo content', () => {
-  const ctx = baseContext();
-  ctx.transcript.todos = [
-    {
-      content: 'This is a very long todo content that should be truncated for display',
-      status: 'in_progress',
-    },
-  ];
-  const line = renderTodosLine(ctx);
-  assert.ok(line?.includes('...'));
-});
-
-test('renderTodosLine returns null when no todos exist', () => {
-  const ctx = baseContext();
-  assert.equal(renderTodosLine(ctx), null);
-});
-
-test('renderToolsLine returns null when no tools exist', () => {
-  const ctx = baseContext();
-  assert.equal(renderToolsLine(ctx), null);
-});
-
-// Usage display tests
-test('renderSessionLine displays plan name in model bracket', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: 23,
-    sevenDay: 45,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('Opus'), 'should include model name');
-  assert.ok(line.includes('Max'), 'should include plan name');
-});
-
-test('renderSessionLine prefers subscription plan over API env var', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: 23,
-    sevenDay: 45,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  const savedApiKey = process.env.ANTHROPIC_API_KEY;
-  process.env.ANTHROPIC_API_KEY = 'test-key';
-
-  try {
-    const line = renderSessionLine(ctx);
-    assert.ok(line.includes('Max'), 'should include plan label');
-    assert.ok(!line.includes('API'), 'should not include API label when plan is known');
-  } finally {
-    if (savedApiKey === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = savedApiKey;
-    }
-  }
-});
-
-test('renderProjectLine prefers subscription plan over API env var', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 10,
-    sevenDay: 20,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  const savedApiKey = process.env.ANTHROPIC_API_KEY;
-  process.env.ANTHROPIC_API_KEY = 'test-key';
-
-  try {
-    const line = renderProjectLine(ctx);
-    assert.ok(line?.includes('Pro'), 'should include plan label');
-    assert.ok(!line?.includes('API'), 'should not include API label when plan is known');
-  } finally {
-    if (savedApiKey === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = savedApiKey;
-    }
-  }
-});
-
-test('renderSessionLine shows Bedrock label and hides usage for bedrock model ids', () => {
-  const ctx = baseContext();
-  ctx.stdin.model = { display_name: 'Sonnet', id: 'anthropic.claude-3-5-sonnet-20240620-v1:0' };
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: 23,
-    sevenDay: 45,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('Sonnet'), 'should include model name');
-  assert.ok(line.includes('Bedrock'), 'should include Bedrock label');
-  assert.ok(!line.includes('5h:'), 'should hide usage display');
-});
-
-test('renderSessionLine displays usage percentages (7d hidden when low)', () => {
-  const ctx = baseContext();
-  ctx.config.display.sevenDayThreshold = 80;
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 6,
-    sevenDay: 13,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('5h:'), 'should include 5h label');
-  assert.ok(!line.includes('7d:'), 'should NOT include 7d when below 80%');
-  assert.ok(line.includes('6%'), 'should include 5h percentage');
-});
-
-test('renderSessionLine shows 7d when approaching limit (>=80%)', () => {
-  const ctx = baseContext();
-  ctx.config.display.sevenDayThreshold = 80;
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 45,
-    sevenDay: 85,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('5h:'), 'should include 5h label');
-  assert.ok(line.includes('7d:'), 'should include 7d when >= 80%');
-  assert.ok(line.includes('85%'), 'should include 7d percentage');
-});
-
-test('renderSessionLine shows 7d reset countdown in text-only mode', () => {
-  const ctx = baseContext();
-  const resetTime = new Date(Date.now() + (28 * 60 * 60 * 1000)); // 1d 4h from now
-  ctx.config.display.sevenDayThreshold = 80;
-  ctx.config.display.usageBarEnabled = false;
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 45,
-    sevenDay: 85,
-    fiveHourResetAt: null,
-    sevenDayResetAt: resetTime,
-  };
-
-  const line = stripAnsi(renderSessionLine(ctx));
-  assert.ok(line.includes('7d: 85%'), `should include 7d label and percentage: ${line}`);
-  assert.ok(line.includes('(1d 4h)'), `should include 7d reset countdown in text-only mode: ${line}`);
-});
-
-test('renderSessionLine respects sevenDayThreshold override', () => {
-  const ctx = baseContext();
-  ctx.config.display.sevenDayThreshold = 0;
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 10,
-    sevenDay: 5,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('7d:'), 'should include 7d when threshold is 0');
-});
-
-test('renderSessionLine shows 5hr reset countdown', () => {
-  const ctx = baseContext();
-  const resetTime = new Date(Date.now() + 7200000); // 2 hours from now
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 45,
-    sevenDay: 20,
-    fiveHourResetAt: resetTime,
-    sevenDayResetAt: null,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('5h:'), 'should include 5h label');
-  assert.ok(line.includes('2h'), 'should include reset countdown');
-});
-
-test('renderUsageLine shows reset countdown in days when >= 24 hours', () => {
-  const ctx = baseContext();
-  const resetTime = new Date(Date.now() + (151 * 3600000) + (59 * 60000)); // 6d 7h 59m from now
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 45,
-    sevenDay: 20,
-    fiveHourResetAt: resetTime,
-    sevenDayResetAt: null,
-  };
-  const line = renderUsageLine(ctx);
-  assert.ok(line, 'should render usage line');
-  const plain = stripAnsi(line);
-  assert.ok(/\(\d+d( \d+h)?\)/.test(plain), `expected day/hour reset format, got: ${plain}`);
-  assert.ok(!plain.includes('151h'), `should avoid raw hour format for long durations: ${plain}`);
-});
-
-test('renderUsageLine shows 7d reset countdown in text-only mode', () => {
-  const ctx = baseContext();
-  const resetTime = new Date(Date.now() + (28 * 60 * 60 * 1000)); // 1d 4h from now
-  ctx.config.display.usageBarEnabled = false;
-  ctx.config.display.sevenDayThreshold = 80;
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 45,
-    sevenDay: 85,
-    fiveHourResetAt: null,
-    sevenDayResetAt: resetTime,
-  };
-
-  const line = stripAnsi(renderUsageLine(ctx));
-  assert.ok(line.includes('5h: 45%'), `should include 5h text-only usage: ${line}`);
-  assert.ok(line.includes('7d: 85%'), `should include 7d text-only usage: ${line}`);
-  assert.ok(line.includes('(1d 4h)'), `should include 7d reset countdown in text-only mode: ${line}`);
-});
-
-test('renderSessionLine displays limit reached warning', () => {
-  const ctx = baseContext();
-  const resetTime = new Date(Date.now() + 3600000); // 1 hour from now
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 100,
-    sevenDay: 45,
-    fiveHourResetAt: resetTime,
-    sevenDayResetAt: null,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('已达上限'), 'should show limit reached');
-  assert.ok(line.includes('重置'), 'should show reset time');
-});
-
-test('renderUsageLine shows limit reset in days when >= 24 hours', () => {
-  const ctx = baseContext();
-  const resetTime = new Date(Date.now() + (151 * 3600000) + (59 * 60000)); // 6d 7h 59m from now
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 100,
-    sevenDay: 45,
-    fiveHourResetAt: resetTime,
-    sevenDayResetAt: null,
-  };
-  const line = renderUsageLine(ctx);
-  assert.ok(line, 'should render usage line');
-  const plain = stripAnsi(line);
-  assert.ok(plain.includes('已达上限'), 'should show limit reached');
-  assert.ok(/\d+d( \d+h)?重置/.test(plain), `expected day/hour reset format, got: ${plain}`);
-  assert.ok(!plain.includes('151h'), `should avoid raw hour format for long durations: ${plain}`);
-});
-
-test('renderSessionLine displays -- for null usage values', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: null,
-    sevenDay: null,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('5h:'), 'should include 5h label');
-  assert.ok(line.includes('--'), 'should show -- for null values');
-});
-
-test('renderSessionLine omits usage when usageData is null', () => {
-  const ctx = baseContext();
-  ctx.usageData = null;
-  const line = renderSessionLine(ctx);
-  assert.ok(!line.includes('5h:'), 'should not include 5h label');
-  assert.ok(!line.includes('7d:'), 'should not include 7d label');
-});
-
-test('renderSessionLine displays warning when API is unavailable', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: null,
-    sevenDay: null,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-    apiUnavailable: true,
-    apiError: 'http-401',
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('用量:'), 'should show usage label');
-  assert.ok(line.includes('⚠'), 'should show warning indicator');
-  assert.ok(line.includes('401'), 'should include error code');
-  assert.ok(!line.includes('5h:'), 'should not show 5h when API unavailable');
-});
-
-test('renderSessionLine shows syncing hint when usage API is rate-limited', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: null,
-    sevenDay: null,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-    apiUnavailable: true,
-    apiError: 'rate-limited',
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('用量:'), 'should show usage label');
-  assert.ok(line.includes('同步中...'), 'should show syncing hint for rate limiting');
-  assert.ok(!line.includes('rate-limited'), 'should not expose raw rate-limit error key');
-});
-
-test('renderSessionLine keeps stale usage visible while rate-limited', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: 25,
-    sevenDay: 85,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-    apiError: 'rate-limited',
-  };
-  const compactLine = renderSessionLine(ctx);
-  assert.ok(compactLine.includes('25%'), 'should keep the last successful 5h usage visible');
-  assert.ok(compactLine.includes('85%'), 'should keep the last successful 7d usage visible');
-  assert.ok(compactLine.includes('同步中...'), 'should show syncing hint alongside stale usage');
-
-  const usageLine = renderUsageLine(ctx);
-  assert.ok(usageLine?.includes('25%'), 'expanded usage line should keep stale 5h usage visible');
-  assert.ok(usageLine?.includes('85%'), 'expanded usage line should keep stale 7d usage visible');
-  assert.ok(usageLine?.includes('同步中...'), 'expanded usage line should show syncing hint');
-});
-
-test('renderSessionLine uses custom warning and critical colors for usage states', () => {
-  const ctx = baseContext();
-  ctx.config.colors = {
-    context: 'green',
-    usage: 'brightBlue',
-    warning: 'cyan',
-    usageWarning: 'brightMagenta',
-    critical: 'magenta',
-  };
-  ctx.usageData = {
-    planName: 'Max',
-    fiveHour: null,
-    sevenDay: null,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-    apiUnavailable: true,
-    apiError: 'http-401',
-  };
-
-  const warningLine = renderSessionLine(ctx);
-  assert.ok(warningLine.includes('\x1b[36m用量: ⚠ (401)\x1b[0m'), `expected custom warning color, got: ${JSON.stringify(warningLine)}`);
-
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 100,
-    sevenDay: 45,
-    fiveHourResetAt: new Date(Date.now() + 3600000),
-    sevenDayResetAt: null,
-  };
-
-  const criticalLine = renderSessionLine(ctx);
-  assert.ok(criticalLine.includes('\x1b[35m⚠ 已达上限'), `expected custom critical color, got: ${JSON.stringify(criticalLine)}`);
-});
-
-test('renderUsageLine uses custom usage palette overrides', () => {
-  const ctx = baseContext();
-  ctx.config.display.usageBarEnabled = true;
-  ctx.config.colors = {
-    context: 'green',
-    usage: 'cyan',
-    warning: 'yellow',
-    usageWarning: 'magenta',
-    critical: 'red',
-  };
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 25,
-    sevenDay: 80,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-
-  const line = renderUsageLine(ctx);
-  assert.ok(line, 'should render usage line');
-  assert.ok(line.includes('\x1b[36m███'), `expected custom usage bar color, got: ${JSON.stringify(line)}`);
-  assert.ok(line.includes('\x1b[36m25%\x1b[0m'), `expected custom usage percentage color, got: ${JSON.stringify(line)}`);
-  assert.ok(line.includes('\x1b[35m████████'), `expected custom usage warning color, got: ${JSON.stringify(line)}`);
-  assert.ok(line.includes('\x1b[35m80%\x1b[0m'), `expected custom usage warning percentage color, got: ${JSON.stringify(line)}`);
-});
-
-test('renderSessionLine hides usage when showUsage config is false (hybrid toggle)', () => {
-  const ctx = baseContext();
-  ctx.usageData = {
-    planName: 'Pro',
-    fiveHour: 25,
-    sevenDay: 10,
-    fiveHourResetAt: null,
-    sevenDayResetAt: null,
-  };
-  // Even with usageData present, setting showUsage to false should hide it
-  ctx.config.display.showUsage = false;
-  const line = renderSessionLine(ctx);
-  assert.ok(!line.includes('5h:'), 'should not show usage when showUsage is false');
-  assert.ok(!line.includes('Pro'), 'should not show plan name when showUsage is false');
-});
-
-test('renderSessionLine uses buffered percent when autocompactBuffer is enabled', () => {
-  const ctx = baseContext();
-  // 60000 tokens / 200000 = 30% raw, scale = (0.30 - 0.05) / (0.50 - 0.05) ≈ 0.556
-  // buffer = 200000 * 0.165 * 0.556 ≈ 18333, (60000 + 18333) / 200000 = 39.2% → 39%
-  ctx.stdin.context_window.current_usage.input_tokens = 60000;
-  ctx.config.display.autocompactBuffer = 'enabled';
-  const line = renderSessionLine(ctx);
-  // Should show 39% (buffered), not 30% (raw)
-  assert.ok(line.includes('39%'), `expected buffered percent 39%, got: ${line}`);
-});
-
-test('renderSessionLine uses raw percent when autocompactBuffer is disabled', () => {
-  const ctx = baseContext();
-  // 60000 tokens / 200000 = 30% raw
-  ctx.stdin.context_window.current_usage.input_tokens = 60000;
-  ctx.config.display.autocompactBuffer = 'disabled';
-  const line = renderSessionLine(ctx);
-  // Should show 30% (raw), not 39% (buffered)
-  assert.ok(line.includes('30%'), `expected raw percent 30%, got: ${line}`);
-});
-
-test('renderSessionLine avoids inflated startup percentage before native context data exists', () => {
-  const ctx = baseContext();
-  ctx.stdin.context_window.current_usage = {};
-  ctx.stdin.context_window.used_percentage = null;
-  ctx.config.display.autocompactBuffer = 'enabled';
-
-  const line = renderSessionLine(ctx);
-
-  assert.ok(line.includes('0%'), `expected startup percent 0%, got: ${line}`);
-});
-
-test('render adds separator line when showSeparators is true and activity exists', () => {
-  const ctx = baseContext();
-  ctx.config.showSeparators = true;
-  ctx.transcript.tools = [
-    { id: 'tool-1', name: 'Read', status: 'completed', startTime: new Date(0), endTime: new Date(0), duration: 0 },
-  ];
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (line) => logs.push(line);
-  try {
-    render(ctx);
-  } finally {
-    console.log = originalLog;
-  }
-
-  assert.ok(logs.length > 1, 'should render multiple lines');
-  assert.ok(logs.some(l => l.includes('─')), 'should include separator line');
-});
-
-test('render omits separator when showSeparators is true but no activity', () => {
-  const ctx = baseContext();
-  ctx.config.showSeparators = true;
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (line) => logs.push(line);
-  try {
-    render(ctx);
-  } finally {
-    console.log = originalLog;
-  }
-
-  assert.ok(!logs.some(l => l.includes('─')), 'should not include separator');
-});
-
-test('render preserves regular spaces instead of non-breaking spaces', () => {
-  const ctx = baseContext();
-  ctx.config.lineLayout = 'expanded';
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (line) => logs.push(line);
-  try {
-    render(ctx);
-  } finally {
-    console.log = originalLog;
-  }
-
-  assert.ok(logs.length > 0, 'should render at least one line');
-  assert.ok(logs.every(line => !line.includes('\u00A0')), 'output should not include non-breaking spaces');
-});
-
-// fileStats tests
-test('renderSessionLine displays file stats when showFileStats is true', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.config.gitStatus.showFileStats = true;
-  ctx.gitStatus = {
-    branch: 'main',
-    isDirty: true,
-    ahead: 0,
-    behind: 0,
-    fileStats: { modified: 2, added: 1, deleted: 0, untracked: 3 },
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('!2'), 'expected modified count');
-  assert.ok(line.includes('+1'), 'expected added count');
-  assert.ok(line.includes('?3'), 'expected untracked count');
-  assert.ok(!line.includes('✘'), 'should not show deleted when 0');
-});
-
-test('renderSessionLine omits file stats when showFileStats is false', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.config.gitStatus.showFileStats = false;
-  ctx.gitStatus = {
-    branch: 'main',
-    isDirty: true,
-    ahead: 0,
-    behind: 0,
-    fileStats: { modified: 2, added: 1, deleted: 0, untracked: 3 },
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(!line.includes('!2'), 'should not show modified count');
-  assert.ok(!line.includes('+1'), 'should not show added count');
-});
-
-test('renderSessionLine handles missing showFileStats config (backward compatibility)', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  // Simulate old config without showFileStats
-  delete ctx.config.gitStatus.showFileStats;
-  ctx.gitStatus = {
-    branch: 'main',
-    isDirty: true,
-    ahead: 0,
-    behind: 0,
-    fileStats: { modified: 2, added: 1, deleted: 0, untracked: 3 },
-  };
-  // Should not crash and should not show file stats (default is false)
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('git:('), 'should still show git info');
-  assert.ok(!line.includes('!2'), 'should not show file stats when config missing');
-});
-
-test('renderSessionLine combines showFileStats with showDirty and showAheadBehind', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.config.gitStatus = {
-    enabled: true,
-    showDirty: true,
-    showAheadBehind: true,
-    showFileStats: true,
-  };
-  ctx.gitStatus = {
-    branch: 'feature',
-    isDirty: true,
-    ahead: 2,
-    behind: 1,
-    fileStats: { modified: 3, added: 0, deleted: 1, untracked: 0 },
-  };
-  const line = renderSessionLine(ctx);
-  assert.ok(line.includes('feature'), 'expected branch name');
-  assert.ok(line.includes('*'), 'expected dirty indicator');
-  assert.ok(line.includes('↑2'), 'expected ahead count');
-  assert.ok(line.includes('↓1'), 'expected behind count');
-  assert.ok(line.includes('!3'), 'expected modified count');
-  assert.ok(line.includes('✘1'), 'expected deleted count');
-});
-
-test('render expanded layout honors custom elementOrder including activity placement', () => {
-  const ctx = baseContext();
-  ctx.config.lineLayout = 'expanded';
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.usageData = {
-    planName: 'Team',
-    fiveHour: 30,
-    sevenDay: 10,
-    fiveHourResetAt: new Date(Date.now() + 60 * 60 * 1000),
-    sevenDayResetAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-  };
-  ctx.claudeMdCount = 1;
-  ctx.rulesCount = 2;
-  ctx.transcript.tools = [
-    { id: 'tool-1', name: 'Read', status: 'completed', startTime: new Date(0), endTime: new Date(0), duration: 0 },
-  ];
-  ctx.transcript.agents = [
-    { id: 'agent-1', type: 'planner', status: 'running', startTime: new Date(0) },
-  ];
-  ctx.transcript.todos = [
-    { content: 'todo-marker', status: 'in_progress' },
-  ];
-  ctx.config.elementOrder = ['tools', 'project', 'usage', 'context', 'environment', 'agents', 'todos'];
-
-  const lines = captureRenderLines(ctx);
-  const toolIndex = lines.findIndex(line => line.includes('Read'));
-  const projectIndex = lines.findIndex(line => line.includes('my-project'));
-  const combinedIndex = lines.findIndex(line => line.includes('用量') && line.includes('上下文'));
-  const environmentIndex = lines.findIndex(line => line.includes('CLAUDE.md'));
-  const agentIndex = lines.findIndex(line => line.includes('planner'));
-  const todoIndex = lines.findIndex(line => line.includes('todo-marker'));
-
-  assert.deepEqual(
-    [toolIndex, projectIndex, combinedIndex, environmentIndex, agentIndex, todoIndex].every(index => index >= 0),
-    true,
-    'expected all configured elements to render'
+const raw = (c, columns = null) => renderLines(c, columns, NOW);
+const lines = (c, columns = null) => raw(c, columns).map(plain);
+const usage = (overrides = {}) => ({
+  fiveHour: 25,
+  sevenDay: 40,
+  fiveHourResetAt: from(90 * MINUTE),
+  sevenDayResetAt: from(50 * HOUR),
+  ...overrides,
+});
+const fable = (percent = 60) => ({ label: 'Fable', percent, resetAt: from(30 * HOUR) });
+const compact = (config = {}) => ({ ...config, lineLayout: 'compact' });
+
+afterEach(() => setLanguage('en'));
+
+test('every line starts with a reset so earlier colour cannot leak in', () => {
+  for (const line of raw(ctx({ usageData: usage() }))) assert.ok(line.startsWith('\x1b[0m'), JSON.stringify(line));
+});
+
+test('scoped usage windows follow 5h and weekly, with the window length in compact', () => {
+  const data = usage({ sevenDay: 85, scopedWindows: [fable()] });
+  assert.equal(
+    lines(ctx({ usageData: data }))[1],
+    'Context █████░░░░░ 45% │ Usage ███░░░░░░░ 25% (resets in 1h 30m) | Weekly █████████░ 85% (resets in 2d 2h) | Fable ██████░░░░ 60% (resets in 1d 6h)',
   );
-  assert.ok(toolIndex < projectIndex, 'tool line should move ahead of project');
-  assert.ok(projectIndex < combinedIndex, 'combined usage/context line should follow project');
-  assert.ok(combinedIndex < environmentIndex, 'environment line should follow context/usage');
-  assert.ok(environmentIndex < agentIndex, 'agent line should follow environment');
-  assert.ok(agentIndex < todoIndex, 'todo line should follow agent line');
+  assert.equal(
+    lines(ctx({ usageData: data, config: compact() }))[0],
+    '[Opus] █████░░░░░ 45% | my-project | Usage ███░░░░░░░ 25% (1h 30m / 5h) | Weekly █████████░ 85% (2d 2h / Weekly) | Fable ██████░░░░ 60% (1d 6h / 7d)',
+  );
 });
 
-test('render expanded layout omits elements not present in elementOrder', () => {
-  const ctx = baseContext();
-  ctx.config.lineLayout = 'expanded';
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.usageData = {
-    planName: 'Team',
-    fiveHour: 30,
-    sevenDay: 10,
-    fiveHourResetAt: new Date(Date.now() + 60 * 60 * 1000),
-    sevenDayResetAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-  };
-  ctx.claudeMdCount = 1;
-  ctx.transcript.tools = [
-    { id: 'tool-1', name: 'Read', status: 'completed', startTime: new Date(0), endTime: new Date(0), duration: 0 },
-  ];
-  ctx.transcript.agents = [
-    { id: 'agent-1', type: 'planner', status: 'running', startTime: new Date(0) },
-  ];
-  ctx.transcript.todos = [
-    { content: 'todo-marker', status: 'in_progress' },
-  ];
-  ctx.config.elementOrder = ['project', 'tools'];
+test('scoped-only usage leads with the Usage label; hiding scoped windows keeps the balance', () => {
+  const scopedOnly = usage({ fiveHour: null, sevenDay: null, scopedWindows: [fable()] });
+  assert.equal(lines(ctx({ usageData: scopedOnly }))[1], 'Context █████░░░░░ 45% │ Usage Fable ██████░░░░ 60% (resets in 1d 6h)');
 
-  const output = captureRenderLines(ctx).join('\n');
-
-  assert.ok(output.includes('my-project'), 'project should render when included');
-  assert.ok(output.includes('Read'), 'tools should render when included');
-  assert.ok(!output.includes('上下文'), 'context should be omitted when excluded');
-  assert.ok(!output.includes('用量'), 'usage should be omitted when excluded');
-  assert.ok(!output.includes('CLAUDE.md'), 'environment should be omitted when excluded');
-  assert.ok(!output.includes('planner'), 'agents should be omitted when excluded');
-  assert.ok(!output.includes('todo-marker'), 'todos should be omitted when excluded');
+  const hidden = { config: { display: { showModelScopedUsage: false } } };
+  assert.equal(lines(ctx({ usageData: scopedOnly, ...hidden }))[1], 'Context █████░░░░░ 45%');
+  assert.equal(
+    lines(ctx({ usageData: { ...scopedOnly, balanceLabel: '¥6.35' }, ...hidden }))[1],
+    'Context █████░░░░░ 45% │ Usage ¥6.35',
+  );
+  const high = usage({ fiveHour: 10, sevenDay: 10, scopedWindows: [fable(95)] });
+  const threshold = { display: { showModelScopedUsage: false, usageThreshold: 50 } };
+  assert.equal(lines(ctx({ usageData: high, config: threshold }))[1], 'Context █████░░░░░ 45%', 'a hidden window cannot lift usage over the threshold');
 });
 
-test('render expanded layout combines usage and context when adjacent in elementOrder', () => {
-  const ctx = baseContext();
-  ctx.config.lineLayout = 'expanded';
-  ctx.usageData = {
-    planName: 'Team',
-    fiveHour: 30,
-    sevenDay: 10,
-    fiveHourResetAt: new Date(Date.now() + 60 * 60 * 1000),
-    sevenDayResetAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-  };
-  ctx.config.elementOrder = ['usage', 'context'];
-
-  const lines = captureRenderLines(ctx);
-
-  assert.equal(lines.length, 1, 'adjacent usage and context should share one expanded line');
-  assert.ok(lines[0].includes('用量'), 'combined line should include usage');
-  assert.ok(lines[0].includes('上下文'), 'combined line should include context');
-  assert.ok(lines[0].includes('│'), 'combined line should preserve the shared separator');
+test('a reached limit replaces the windows; compact drops the Usage label', () => {
+  const data = usage({ fiveHour: 100, balanceLabel: '¥6.35', scopedWindows: [fable()] });
+  assert.equal(
+    lines(ctx({ usageData: data }))[1],
+    'Context █████░░░░░ 45% │ Usage ⚠ Limit reached (resets in 1h 30m) | Fable ██████░░░░ 60% (resets in 1d 6h) | ¥6.35',
+  );
+  assert.match(lines(ctx({ usageData: data, config: compact() }))[0], /my-project \| ⚠ Limit reached \(resets in 1h 30m\) \| Fable .* \| ¥6\.35$/);
+  assert.match(lines(ctx({ usageData: usage({ sevenDay: 100, sevenDayResetAt: null }) }))[1], /Usage ⚠ Limit reached$/);
+  assert.match(lines(ctx({ usageData: data, config: { display: { usageCompact: true } } }))[1], /│ ⚠ Limit \(1h 30m\) \| Fable: 60% \(1d 6h\) \| ¥6\.35$/);
 });
 
-test('render expanded layout keeps usage and context separate when not adjacent', () => {
-  const ctx = baseContext();
-  ctx.config.lineLayout = 'expanded';
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.usageData = {
-    planName: 'Team',
-    fiveHour: 30,
-    sevenDay: 10,
-    fiveHourResetAt: new Date(Date.now() + 60 * 60 * 1000),
-    sevenDayResetAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-  };
-  ctx.config.elementOrder = ['usage', 'project', 'context'];
-
-  const lines = captureRenderLines(ctx);
-  const usageLine = lines.find(line => line.includes('用量'));
-  const contextLine = lines.find(line => line.includes('上下文'));
-  const combinedLine = lines.find(line => line.includes('用量') && line.includes('上下文'));
-
-  assert.ok(usageLine, 'usage should render on its own line');
-  assert.ok(contextLine, 'context should render on its own line');
-  assert.equal(combinedLine, undefined, 'usage and context should not combine when separated by another element');
+test('below usageThreshold only a balance remains', () => {
+  const config = { display: { usageThreshold: 50 } };
+  assert.equal(lines(ctx({ usageData: usage(), config }))[1], 'Context █████░░░░░ 45%');
+  assert.equal(lines(ctx({ usageData: usage({ balanceLabel: '¥6.35' }), config }))[1], 'Context █████░░░░░ 45% │ Usage ¥6.35');
+  assert.equal(lines(ctx({ usageData: usage({ balanceLabel: '¥6.35' }), config: compact(config) }))[0], '[Opus] █████░░░░░ 45% | my-project | ¥6.35');
+  assert.equal(lines(ctx({ usageData: usage(), config: { display: { showUsage: false } } }))[1], 'Context █████░░░░░ 45%');
 });
 
-test('render compact layout keeps activity lines even when elementOrder omits them', () => {
-  const ctx = baseContext();
-  ctx.stdin.cwd = '/tmp/my-project';
-  ctx.transcript.tools = [
-    { id: 'tool-1', name: 'Read', status: 'completed', startTime: new Date(0), endTime: new Date(0), duration: 0 },
-  ];
-  ctx.transcript.todos = [
-    { content: 'todo-marker', status: 'in_progress' },
-  ];
-  ctx.config.elementOrder = ['project'];
+test('weekly-only usage keeps its label in both layouts', () => {
+  const data = usage({ fiveHour: null });
+  assert.equal(lines(ctx({ usageData: data }))[1], 'Context █████░░░░░ 45% │ Usage Weekly ████░░░░░░ 40% (resets in 2d 2h)');
+  assert.match(lines(ctx({ usageData: data, config: compact() }))[0], /my-project \| Weekly ████░░░░░░ 40%/);
+});
 
-  const output = captureRenderLines(ctx).join('\n');
+test('usage pace colours the percent, marks it, and overrides the thresholds', () => {
+  const data = usage({ fiveHour: 70, fiveHourResetAt: from(2.5 * HOUR), sevenDay: 50, sevenDayResetAt: from(84 * HOUR) });
+  const config = { display: { usagePace: true, usageThreshold: 80 } };
+  for (const layout of [{}, compact()]) {
+    const line = raw(ctx({ usageData: data, config: { ...config, ...layout } })).join('\n');
+    assert.ok(line.includes(`${RED}70%`), 'projected over 100% is red');
+    assert.ok(line.includes(`${RED}▲`));
+    assert.match(plain(line), /70% ▲.*Weekly.*50% ▲/, 'amber weekly pace surfaces the weekly window');
+    assert.ok(line.includes(`${BRIGHT_MAGENTA}50%`));
+  }
+  assert.equal(lines(ctx({ usageData: data, config: { display: { usageThreshold: 80 } } }))[1], 'Context █████░░░░░ 45%');
+});
 
-  assert.ok(output.includes('Read'), 'compact mode should keep tools visible');
-  assert.ok(output.includes('todo-marker'), 'compact mode should keep todos visible');
+const memory = { totalBytes: 16 * 2 ** 30, usedBytes: 8 * 2 ** 30, freeBytes: 8 * 2 ** 30, usedPercent: 50 };
+const withMemory = { display: { showMemoryUsage: true }, elementOrder: ['project', 'context', 'usage', 'memory'] };
+
+test('a visible memory bar widens the other bar labels to match', () => {
+  const data = usage({ sevenDay: 85 });
+  assert.deepEqual(lines(ctx({ usageData: data, memoryUsage: memory, config: withMemory })).slice(1), [
+    'Context    █████░░░░░ 45% │ Usage      ███░░░░░░░ 25% (resets in 1h 30m) | Weekly     █████████░ 85% (resets in 2d 2h)',
+    'Approx RAM █████░░░░░ 8.0 GB / 16 GB (50%)',
+  ]);
+  assert.equal(lines(ctx({ usageData: data, config: withMemory }))[1].slice(0, 9), 'Context █');
+  assert.equal(lines(ctx({ usageData: data, memoryUsage: memory, config: compact(withMemory) })).length, 1, 'memory is expanded-only');
+});
+
+test('a merged row that does not fit stacks with aligned labels', () => {
+  assert.deepEqual(lines(ctx({ usageData: usage({ sevenDay: 85 }), memoryUsage: memory, config: withMemory }), 60).slice(1), [
+    'Context    ███░░░ 45%',
+    'Usage      ██░░░░ 25% (resets in 1h 30m)',
+    'Weekly     █████░ 85% (resets in 2d 2h)',
+    'Approx RAM ███░░░ 8.0 GB / 16 GB (50%)',
+  ]);
+  assert.deepEqual(lines(ctx({ usageData: usage() }), 50).slice(1), ['Context ██░░ 45%', 'Usage   █░░░ 25% (resets in 1h 30m)']);
+  setLanguage('zh-Hans');
+  const stacked = lines(ctx({ usageData: usage({ sevenDay: 85 }), memoryUsage: memory, config: withMemory }), 60).slice(1);
+  const barColumns = stacked.map((line) => textWidth(line.slice(0, line.search(/[█░]/))));
+  assert.equal(new Set(barColumns).size, 1, `CJK labels pad by cell width: ${stacked.join(' / ')}`);
+});
+
+test('rightAlign pushes the rest of a merged row flush right', () => {
+  const config = { display: { rightAlign: ['usage'] } };
+  const [, row] = lines(ctx({ usageData: usage(), config }), 100);
+  assert.equal(row.length, 100);
+  assert.match(row, /^Context █████░░░░░ 45% {2,}Usage ███░░░░░░░ 25% \(resets in 1h 30m\)$/);
+  const unaligned = 'Context █████░░░░░ 45% │ Usage ███░░░░░░░ 25% (resets in 1h 30m)';
+  assert.equal(lines(ctx({ usageData: usage(), config }))[1], unaligned, 'no width, no alignment');
+  assert.equal(lines(ctx({ usageData: usage(), config: { display: { rightAlign: ['context'] } } }), 100)[1], unaligned, 'nothing precedes it');
+});
+
+test('project paths keep the configured trailing segments on POSIX and Windows', () => {
+  const project = (cwd, pathLevels) => lines(ctx({ stdin: { cwd }, config: { pathLevels } }))[0].replace('[Opus] │ ', '');
+  assert.equal(project('/home/u/dev/app', 2), 'dev/app');
+  assert.equal(project('/home/u/dev/app/', 'full'), '/home/u/dev/app');
+  assert.equal(project('/', 1), '/');
+  assert.equal(project('C:\\Users\\me\\app', 1), 'app');
+  assert.equal(project('C:\\Users\\me\\app', 'full'), 'C:/Users/me/app');
+  assert.equal(project('C:\\', 'full'), 'C:/');
+  assert.equal(project('\\\\server\\share\\app', 'full'), '//server/share/app');
+});
+
+test('the model badge keeps effort on the model and places the provider by showProvider', () => {
+  const badge = (stdin, display = {}, transcript = {}) => lines(ctx({ stdin: { model: { display_name: 'Opus', id: 'opusplan' }, ...stdin }, transcript, config: { display } }))[0].split(' │ ')[0];
+  const xhigh = { effort: { level: 'xhigh' } };
+  assert.equal(badge({}), '[Opus | Enterprise]');
+  assert.equal(badge(xhigh, { showEffortLevel: true }), '[Opus ◕ xhigh | Enterprise]');
+  assert.equal(badge(xhigh, { showEffortLevel: true, showProvider: true, providerName: 'Acme' }), '[Acme | Opus ◕ xhigh]');
+  assert.equal(badge(xhigh, { showEffortLevel: true, effortFormat: 'symbol' }), '[Opus ◕ | Enterprise]');
+  assert.equal(badge(xhigh, { showEffortLevel: true, effortFormat: 'symbol' }, { ultracodeActive: true }), '[Opus ◕ ultracode(xhigh) | Enterprise]');
+});
+
+test('the advisor shows a readable model name or the override, capped', () => {
+  const advisor = (advisorModel, display = {}) => lines(ctx({ transcript: { advisorModel }, config: { display: { showAdvisor: true, ...display } } }))[0].split(' │ ').at(-1);
+  assert.equal(advisor('claude-opus-4-7'), 'Advisor: Opus 4.7');
+  assert.equal(advisor('sonnet'), 'Advisor: Sonnet');
+  assert.equal(advisor('claude-custom-x'), 'Advisor: custom-x');
+  assert.equal(advisor('claude-opus-4-7', { advisorOverride: 'Reviewer' }), 'Advisor: Reviewer');
+  assert.equal(advisor('x'.repeat(80)), `Advisor: ${'x'.repeat(64)}`);
+  assert.equal(advisor('claude-opus-4-7', { advisorOverride: 'A'.repeat(63) + '😀' + 'B' }), `Advisor: ${'A'.repeat(63)}`);
+  assert.equal(advisor(undefined), 'my-project');
+});
+
+test('projectLineOrder moves keyed parts and keeps unlisted ones after them', () => {
+  const config = { projectLineOrder: ['duration', 'project'], display: { showDuration: true, showSessionName: true, customLine: 'hi', customLinePosition: 'first' } };
+  const stdin = { session_name: 'auth-fix', cost: { total_duration_ms: 5 * MINUTE } };
+  assert.equal(lines(ctx({ stdin, config }))[0], 'hi │ ⏱️  5m │ my-project │ [Opus] │ auth-fix');
+});
+
+const gitStatus = { branch: 'main', isDirty: true, ahead: 3, behind: 1, lineDiff: { added: 12, deleted: 4 }, fileStats: { modified: 2, added: 1, deleted: 1, untracked: 3, trackedFiles: [] } };
+const gitConfig = { gitStatus: { showAheadBehind: true, showFileStats: true, showWorktree: true, pushWarningThreshold: 2, pushCriticalThreshold: 3 } };
+
+test('git shows line diffs in expanded and file counts in compact', () => {
+  const stdin = { workspace: { git_worktree: 'feature-x' } };
+  assert.equal(lines(ctx({ gitStatus, stdin, config: gitConfig }))[0], '[Opus] │ my-project git:(main* ↑3 ↓1 [+12 -4]) ⎇ feature-x');
+  assert.equal(lines(ctx({ gitStatus, stdin, config: compact(gitConfig) }))[0], '[Opus] █████░░░░░ 45% | my-project git:(main* ↑3 ↓1 !2 +1 ✘1 ?3) ⎇ feature-x');
+  assert.ok(raw(ctx({ gitStatus, config: gitConfig }))[0].includes(`${RED}↑3`), 'at the critical threshold');
+  assert.equal(lines(ctx({ gitStatus, config: { gitStatus: { enabled: false } } }))[0], '[Opus] │ my-project');
+});
+
+test('git branchOverflow wrap puts git in its own part', () => {
+  const config = { gitStatus: { branchOverflow: 'wrap' } };
+  assert.equal(lines(ctx({ gitStatus, config }))[0], '[Opus] │ my-project │ git:(main*)');
+  assert.deepEqual(lines(ctx({ gitStatus, config }), 15).slice(0, 3), ['[Opus]', 'my-project', 'git:(main*)']);
+});
+
+test('jj has its own toggle, a conflict marker, and no git-only details', () => {
+  const jj = { ...gitStatus, vcs: 'jj', conflict: true, branchUrl: 'https://github.com/a/b/tree/main' };
+  const config = { ...gitConfig, jjStatus: { enabled: true } };
+  const stdin = { workspace: { git_worktree: 'feature-x' } };
+  assert.equal(lines(ctx({ gitStatus: jj, stdin, config }))[0], '[Opus] │ my-project jj:(main* !conflict)');
+  assert.ok(!raw(ctx({ gitStatus: jj, config }))[0].includes('github.com'), 'no branch link');
+  assert.equal(lines(ctx({ gitStatus: jj, config: gitConfig }))[0], '[Opus] │ my-project');
+  assert.equal(lines(ctx({ gitStatus: jj, config: { jjStatus: { enabled: true, showConflicts: false, showDirty: false } } }))[0], '[Opus] │ my-project jj:(main)');
+});
+
+test('the git files line lists the newest files first and hides below 60 columns', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'hud-files-'));
+  try {
+    const names = ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts', 'g.ts'];
+    names.forEach((name, index) => {
+      writeFileSync(path.join(cwd, name), '');
+      utimesSync(path.join(cwd, name), new Date(2026, 0, 1 + index), new Date(2026, 0, 1 + index));
+    });
+    const trackedFiles = [
+      ...names.map((name) => ({ basename: name, fullPath: name, type: 'modified', lineDiff: { added: 1, deleted: 0 } })),
+      { basename: 'outside.ts', fullPath: '../outside.ts', type: 'added' },
+    ];
+    const status = { ...gitStatus, fileStats: { ...gitStatus.fileStats, trackedFiles } };
+    const c = ctx({ gitStatus: status, stdin: { cwd }, config: gitConfig });
+    const files = raw(c, 120).at(-1);
+    assert.equal(plain(files), '~g.ts(+1)  ~f.ts(+1)  ~e.ts(+1)  ~d.ts(+1)  ~c.ts(+1)  ~b.ts(+1)  +2 more  ?3');
+    assert.ok(files.includes(`file://${cwd}/g.ts`));
+    assert.ok(!lines(c, 59).some((line) => line.includes('g.ts')));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('showSeparators puts a rule before the first activity line, clamped to the width', () => {
+  const tool = { id: '1', name: 'Read', status: 'completed', startTime: ago(MINUTE) };
+  const config = { showSeparators: true, display: { showTools: true } };
+  assert.deepEqual(lines(ctx({ transcript: { tools: [tool] }, config })).slice(2), ['─'.repeat(22), '✓ Read ×1']);
+  assert.equal(lines(ctx({ transcript: { tools: [tool] }, config }), 15).find((line) => line.startsWith('─')), '─'.repeat(15));
+  assert.equal(lines(ctx({ config })).length, 2, 'no activity, no rule');
+});
+
+test('tools show the two newest running, then counts by frequency', () => {
+  const tool = (name, status, target) => ({ id: `${name}${Math.random()}`, name, status, target, startTime: ago(MINUTE) });
+  const tools = [
+    tool('Read', 'completed'), tool('Read', 'completed'), tool('Edit', 'error'), tool('Glob', 'completed'), tool('Bash', 'completed'),
+    tool('Grep', 'completed'), tool('Write', 'running', 'C:\\work\\src\\very\\long\\path\\auth.ts'), tool('mcp__github__create_issue', 'running'),
+  ];
+  const display = { showTools: true, toolNameMaxLength: 10 };
+  assert.equal(lines(ctx({ transcript: { tools }, config: { display } }))[2], '◐ Write: .../auth.ts | ◐ create_is… | ✓ Read ×2 | ✓ Edit ×1 | ✓ Glob ×1 | ✓ Bash ×1 | +1 more');
+  const skill = tool('Skill', 'completed');
+  assert.deepEqual(lines(ctx({ transcript: { tools: [skill, tools[0]], skills: ['commit'] }, config: { display: { showTools: true, showSkills: true } } })).slice(2), [
+    '✓ Read ×1',
+    '✓ Skills (1): commit',
+  ]);
+});
+
+test('agents show running first, then those finished within a minute, three at most', () => {
+  const agent = (id, status, startedAgo, endedAgo, extra = {}) => ({ id, type: id, status, startTime: ago(startedAgo), endTime: endedAgo === undefined ? undefined : ago(endedAgo), ...extra });
+  const agents = [
+    agent('explore', 'running', 2 * MINUTE, undefined, { model: 'claude-haiku-4-5-20251001', description: 'Finding auth code' }),
+    agent('stale', 'completed', 10 * MINUTE, 61 * SECOND),
+    agent('plan', 'completed', 5 * MINUTE, 30 * SECOND),
+    agent('review', 'completed', 2 * HOUR + 3 * MINUTE, 10 * SECOND),
+  ];
+  const config = { display: { showAgents: true } };
+  assert.deepEqual(lines(ctx({ transcript: { agents }, config })).slice(2), [
+    '◐ explore [haiku-4.5]: Finding auth code (2m 0s)',
+    '✓ plan (4m 30s)',
+    '✓ review (2h 2m)',
+  ]);
+  const running = ['a', 'b', 'c', 'd'].map((id) => agent(id, 'running', 500));
+  assert.deepEqual(lines(ctx({ transcript: { agents: [...running, agents[2]] }, config })).slice(2), ['◐ b (<1s)', '◐ c (<1s)', '◐ d (<1s)']);
+  const untrusted = [agent('no-end', 'completed', MINUTE), { ...agent('nan', 'completed', MINUTE), endTime: new Date(NaN) }, agent('future', 'completed', MINUTE, -5 * SECOND)];
+  assert.equal(lines(ctx({ transcript: { agents: untrusted }, config })).length, 2, 'no trustworthy completion time');
+});
+
+test('agent model IDs shorten to family and version; others pass through', () => {
+  const model = (id) => lines(ctx({ transcript: { agents: [{ id: 'a', type: 't', model: id, status: 'running', startTime: ago(SECOND) }] }, config: { display: { showAgents: true } } }))[2];
+  assert.equal(model('claude-opus-4-8[1m]'), '◐ t [opus-4.8] (1s)');
+  assert.equal(model('claude-sonnet-5'), '◐ t [sonnet-5] (1s)');
+  assert.equal(model('claude-3-7-sonnet-20250219'), '◐ t [sonnet-3.7] (1s)');
+  assert.equal(model('us.anthropic.claude-opus-4-6-v1:0'), '◐ t [us.anthropic.claude-opus-4-6-v1:0] (1s)');
+  assert.equal(model('claude-fable-5'), '◐ t [claude-fable-5] (1s)');
+  assert.equal(model('claude-'), '◐ t (1s)');
+});
+
+test('agent effort shows next to the model only with showAgentEffort, in effortFormat', () => {
+  const agent = (fields) => ({ id: 'a', type: 'review', status: 'running', startTime: ago(SECOND), effort: 'medium', ...fields });
+  const line = (fields, display) => lines(ctx({ transcript: { agents: [agent(fields)] }, config: { display: { showAgents: true, ...display } } }))[2];
+  assert.equal(line({ model: 'claude-haiku-4-5' }, {}), '◐ review [haiku-4.5] (1s)');
+  assert.equal(line({ model: 'claude-haiku-4-5' }, { showAgentEffort: true }), '◐ review [haiku-4.5 ◔ medium] (1s)');
+  assert.equal(line({}, { showAgentEffort: true, effortFormat: 'symbol' }), '◐ review [◔] (1s)');
+  assert.equal(line({}, { showAgentEffort: true, effortFormat: 'text' }), '◐ review [medium] (1s)');
+  assert.equal(line({ effort: '\x1b[31mHIGH' }, { showAgentEffort: true }), '◐ review [◑ high] (1s)');
+  assert.equal(line({ effort: undefined }, { showAgentEffort: true }), '◐ review (1s)');
+});
+
+test('todos show the task in progress, or completion once every item is done', () => {
+  const config = { display: { showTodos: true } };
+  const todos = [{ content: 'Fix the bug', status: 'in_progress' }, { content: 'b', status: 'completed' }, { content: 'c', status: 'pending' }];
+  assert.equal(lines(ctx({ transcript: { todos }, config }))[2], '▸ Fix the bug (1/3)');
+  assert.equal(lines(ctx({ transcript: { todos: todos.slice(1) }, config })).length, 2, 'nothing in progress, not all done');
+  assert.equal(lines(ctx({ transcript: { todos: [todos[1]] }, config }))[2], '✓ All todos complete (1/1)');
+});
+
+test('todo truncation does not leave half an emoji in the rendered line', () => {
+  const prefix = 'a'.repeat(46);
+  const transcript = { todos: [{ content: `${prefix}😀tail`, status: 'in_progress' }] };
+  const config = { display: { showTodos: true } };
+  assert.equal(lines(ctx({ transcript, config }))[2], `▸ ${prefix}... (0/1)`);
+});
+
+test('agent description truncation keeps joined emoji whole', () => {
+  const prefix = 'a'.repeat(34);
+  const transcript = { agents: [{ id: 'a', type: 'review', description: `${prefix}👩‍💻tail`, status: 'running', startTime: ago(SECOND) }] };
+  const config = { display: { showAgents: true } };
+  assert.equal(lines(ctx({ transcript, config }))[2], `◐ review: ${prefix}... (1s)`);
+});
+
+test('tool target and name truncation keep emoji whole', () => {
+  const tools = [
+    { id: '1', name: 'Edit', status: 'running', target: `${'a'.repeat(16)}😀.ts`, startTime: ago(SECOND) },
+    { id: '2', name: 'mcp__x__abc😀def', status: 'running', startTime: ago(SECOND) },
+  ];
+  const config = { display: { showTools: true, toolNameMaxLength: 5 } };
+  assert.equal(lines(ctx({ transcript: { tools }, config }))[2], `◐ Edit: ${'a'.repeat(16)}... | ◐ abc…`);
+});
+
+test('the environment line names failing MCP servers and respects environmentThreshold', () => {
+  const counts = { claudeMdCount: 2, rulesCount: 3, mcpCount: 4, hooksCount: 1 };
+  const transcript = { mcpErrors: ['github', 'linear', 'slack', 'notion'] };
+  assert.equal(lines(ctx({ ...counts, transcript, config: { display: { showConfigCounts: true } } }))[2], '2 CLAUDE.md | 3 rules | 4 MCPs ⚠ github, linear, slack +1 | 1 hooks');
+  assert.equal(lines(ctx({ claudeMdCount: 2, config: { display: { showConfigCounts: true, environmentThreshold: 5 } } })).length, 2);
+  assert.equal(lines(ctx({ transcript: { mcpErrors: ['github'] }, config: { display: { showMcp: true } } }))[2], '⚠ github');
+});
+
+test('a failing MCP server name is cut on a grapheme boundary', () => {
+  const name = 'A'.repeat(63) + '😀' + 'B';
+  assert.equal(
+    lines(ctx({ transcript: { mcpErrors: [name] }, config: { display: { showMcp: true } } }))[2],
+    `⚠ ${'A'.repeat(63)}`,
+  );
+});
+
+test('the session time line shows the start date and how long ago the last reply was', () => {
+  const transcript = { sessionStart: new Date(2026, 8, 30, 9, 5), lastAssistantResponseAt: ago(2 * MINUTE + 5 * SECOND) };
+  const config = { display: { showSessionStartDate: true, showLastResponseAt: true }, elementOrder: ['sessionTime'] };
+  assert.deepEqual(lines(ctx({ transcript, config })), ['Started: 2026-09-30 09:05 │ Last reply: 2m ago']);
+  setLanguage('zh-Hant');
+  assert.match(lines(ctx({ transcript, config }))[0], /2分前$/);
+});
+
+test('Chinese labels translate the session token summary in both layouts', () => {
+  setLanguage('zh-Hans');
+  const transcript = { sessionTokens: { inputTokens: 12345, outputTokens: 6789, cacheCreationTokens: 0, cacheReadTokens: 4321 } };
+  const config = { display: { showSessionTokens: true } };
+  assert.equal(lines(ctx({ transcript, config })).at(-1), '词元 23k (输入: 12k, 输出: 7k, 缓存: 4k)');
+  assert.match(lines(ctx({ transcript, config: compact(config) }))[0], /\| 词元: 23k \(输入: 12k, 输出: 7k, 缓存: 4k\)$/);
+});
+
+test('the session token summary keeps its last line until elementOrder places it', () => {
+  const transcript = { sessionTokens: { inputTokens: 12345, outputTokens: 6789, cacheCreationTokens: 0, cacheReadTokens: 4321 } };
+  const tokens = 'Tokens 23k (in: 12k, out: 7k, cache: 4k)';
+  const show = { showSessionTokens: true };
+  assert.equal(lines(ctx({ transcript, config: { display: show } })).at(-1), tokens, 'the default order leaves it last');
+  assert.equal(lines(ctx({ transcript, config: { display: show, elementOrder: ['project', 'context'] } })).at(-1), tokens, 'so does an older custom order');
+
+  const merged = lines(ctx({
+    transcript,
+    config: { display: { ...show, mergeGroups: [['project', 'sessionTokens']] }, elementOrder: ['project', 'sessionTokens', 'context'] },
+  }));
+  assert.equal(merged.length, 2);
+  assert.match(merged[0], new RegExp(`my-project .*│ ${tokens.replace(/[()]/g, '\\$&')}$`));
+  assert.match(merged[1], /^Context/);
+
+  const placed = { display: show, elementOrder: ['sessionTokens', 'project'] };
+  assert.equal(lines(ctx({ transcript, config: placed }))[0], tokens);
+  assert.deepEqual(lines(ctx({ transcript, config: { ...placed, display: {} } })).length, 1, 'placed but turned off draws nothing');
+});
+
+test('cost keeps its first-line spot until elementOrder places it', () => {
+  const stdin = { cost: { total_cost_usd: 1.2345 } };
+  const show = { showCost: true };
+  assert.match(lines(ctx({ stdin, config: { display: show } }))[0], /│ Cost \$1\.23$/, 'the default order keeps it on the first line');
+  assert.match(lines(ctx({ stdin, config: { display: show, elementOrder: ['project', 'context'] } }))[0], /│ Cost \$1\.23$/, 'so does an older custom order');
+
+  const placed = { display: show, elementOrder: ['project', 'cost', 'context'] };
+  const [first, cost, context] = lines(ctx({ stdin, config: placed }));
+  assert.doesNotMatch(first, /Cost/);
+  assert.equal(cost, 'Cost $1.23');
+  assert.match(context, /^Context/);
+  assert.deepEqual(lines(ctx({ stdin, config: { ...placed, display: {} } })).length, 2, 'placed but turned off draws nothing');
+});
+
+test('wrap width: columns, then maxWidth, and forceMaxWidth overrides columns', () => {
+  const long = ctx({ usageData: usage(), config: { maxWidth: 40 } });
+  assert.equal(lines(long).length, 3, 'maxWidth applies when the width is unknown');
+  assert.equal(lines(long, 120).length, 2, 'a known width wins over maxWidth');
+  const forced = ctx({ usageData: usage(), config: { maxWidth: 40, forceMaxWidth: true } });
+  assert.equal(lines(forced, 120).length, 3);
+  assert.equal(lines(ctx({ usageData: usage() })).length, 2, 'no width, no wrapping');
+});
+
+test('untrusted text cannot emit terminal control sequences', () => {
+  const hostile = '\x1b]52;c;ZXZpbA==\x07X\x1b[2J\u202E';
+  const started = ago(MINUTE);
+  for (const layout of [{}, compact()]) {
+    const out = raw(ctx({
+      stdin: { model: { display_name: hostile }, cwd: `/home/${hostile}`, session_name: hostile, workspace: { added_dirs: [`/a/${hostile}`], git_worktree: hostile } },
+      transcript: {
+        tools: [{ id: '1', name: hostile, target: hostile, status: 'running', startTime: started }, { id: '2', name: hostile, status: 'completed', startTime: started }],
+        agents: [{ id: 'a', type: hostile, model: hostile, description: hostile, status: 'running', startTime: started }],
+        todos: [{ content: hostile, status: 'in_progress' }],
+        skills: [hostile],
+        mcpErrors: [hostile],
+        advisorModel: hostile,
+      },
+      gitStatus: { branch: hostile, isDirty: false, ahead: 0, behind: 0, fileStats: { modified: 1, added: 0, deleted: 0, untracked: 0, trackedFiles: [{ basename: hostile, fullPath: hostile, type: 'modified' }] } },
+      config: {
+        ...layout,
+        gitStatus: { showFileStats: true, showWorktree: true },
+        display: { showSessionName: true, showTools: true, showAgents: true, showTodos: true, showSkills: true, showMcp: true, showAdvisor: true },
+      },
+    })).join('\n');
+    const visible = out.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07\x1b]*\x1b\\/g, '');
+    assert.doesNotMatch(visible, /[\x00-\x09\x0b-\x1f\x7f-\x9f\u202a-\u202e]/);
+    assert.ok(!out.includes('\x1b]52'));
+  }
 });

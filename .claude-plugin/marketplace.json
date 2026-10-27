@@ -1,20 +1,28 @@
 {
   "name": "claude-hud",
   "owner": {
-    "name": "binbin1213",
-    "email": "piaozhitian@gmail.com"
+    "name": "Jarrod Watts",
+    "email": "jarrodwattsyt@gmail.com"
   },
   "metadata": {
-    "description": "Claude Code 实时状态栏 - 上下文健康度、工具活动、代理跟踪、待办进度",
-    "version": "0.0.10"
+    "description": "Claude Code 实时状态栏 HUD - 上下文健康度、工具活动、子代理跟踪和待办进度",
+    "version": "0.13.1"
   },
   "plugins": [
     {
       "name": "claude-hud",
       "source": "./",
-      "description": "实时状态栏，显示上下文使用率、活动工具、运行中的代理和待办进度。始终显示在输入框下方，零配置即可使用。",
+      "description": "实时显示上下文用量、正在运行的工具、子代理和待办进度。始终显示在输入框下方，无需配置。",
       "category": "monitoring",
-      "tags": ["hud", "statusline", "monitoring", "context", "tools", "agents", "todos"]
+      "tags": [
+        "hud",
+        "statusline",
+        "monitoring",
+        "context",
+        "tools",
+        "agents",
+        "todos"
+      ]
     }
   ]
 }

@@ -4,5 +4,5 @@ export interface ConfigCounts {
     mcpCount: number;
     hooksCount: number;
 }
-export declare function countConfigs(cwd?: string): Promise<ConfigCounts>;
+export declare function countConfigs(cwd?: string): ConfigCounts;
 //# sourceMappingURL=config-reader.d.ts.map

@@ -1,201 +1,212 @@
-import type { StdinData } from './types.js';
-import { AUTOCOMPACT_BUFFER_PERCENT } from './constants.js';
+import type { StdinData, UsageData, TranscriptData } from './types.js';
+import type { ModelFormatMode } from './config.js';
+import { sanitizeTranscriptModel } from './model-source.js';
+import { displayLabel } from './utils/sanitize.js';
 
-export async function readStdin(): Promise<StdinData | null> {
-  if (process.stdin.isTTY) {
-    return null;
+const NO_DATA_TIMEOUT_MS = 250;
+const IDLE_TIMEOUT_MS = 250;
+const MAX_STDIN_BYTES = 256 * 1024;
+
+type StdinStream = Pick<NodeJS.ReadStream, 'setEncoding' | 'on' | 'pause'> & { isTTY?: boolean };
+
+// Returns null for a TTY (setup's manual run), no input, oversized input, or invalid JSON.
+// Resolves as soon as the buffered text parses, or after incomplete input goes idle.
+export function readStdin(stream: StdinStream = process.stdin): Promise<StdinData | null> {
+  if (stream.isTTY) {
+    return Promise.resolve(null);
   }
 
-  const chunks: string[] = [];
+  return new Promise((resolve) => {
+    let raw = '';
+    let done = false;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (value: StdinData | null): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(noDataTimer);
+      clearTimeout(idleTimer);
+      stream.pause();
+      resolve(value);
+    };
+    const parse = (): StdinData | null => {
+      try {
+        const value: unknown = JSON.parse(raw);
+        return value !== null && typeof value === 'object' ? value as StdinData : null;
+      } catch {
+        return null;
+      }
+    };
+    const noDataTimer = setTimeout(() => {
+      if (!raw) finish(null);
+    }, NO_DATA_TIMEOUT_MS);
 
-  try {
-    process.stdin.setEncoding('utf8');
-    for await (const chunk of process.stdin) {
-      chunks.push(chunk as string);
-    }
-    const raw = chunks.join('');
-    if (!raw.trim()) {
-      return null;
-    }
-    return JSON.parse(raw) as StdinData;
-  } catch {
-    return null;
-  }
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => {
+      raw += chunk;
+      if (raw.length > MAX_STDIN_BYTES) {
+        finish(null);
+        return;
+      }
+      const parsed = parse();
+      if (parsed) finish(parsed);
+      else {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => finish(parse()), IDLE_TIMEOUT_MS);
+      }
+    });
+    stream.on('end', () => finish(parse()));
+    stream.on('error', () => finish(null));
+  });
 }
 
 export function getTotalTokens(stdin: StdinData): number {
   const usage = stdin.context_window?.current_usage;
-  if (!usage) return 0;
-
-  // 优先使用 Anthropic 格式
-  const anthropicTotal =
-    (usage.input_tokens ?? 0) +
-    (usage.cache_creation_input_tokens ?? 0) +
-    (usage.cache_read_input_tokens ?? 0);
-
-  if (anthropicTotal > 0) return anthropicTotal;
-
-  // 回退到 GLM 格式
-  return usage.prompt_tokens ?? usage.total_tokens ?? 0;
+  return (usage?.input_tokens ?? 0)
+    + (usage?.cache_creation_input_tokens ?? 0)
+    + (usage?.cache_read_input_tokens ?? 0);
 }
 
-/**
- * Get native percentage from Claude Code v2.1.6+ if available.
- * Returns null if not available or invalid, triggering fallback to manual calculation.
- */
-function getNativePercent(stdin: StdinData): number | null {
-  const nativePercent = stdin.context_window?.used_percentage;
-  if (typeof nativePercent === 'number' && !Number.isNaN(nativePercent)) {
-    return Math.min(100, Math.max(0, Math.round(nativePercent)));
-  }
-  return null;
+export interface ContextUsage {
+  percent: number;
+  tokens: number;
+  size: number;
 }
 
-export function getContextPercent(stdin: StdinData): number {
-  const native = getNativePercent(stdin);
-  if (native !== null && native > 0) {
-    return native;
+const toPercent = (value: number): number => Math.min(100, Math.max(0, Math.round(value)));
+
+// Claude Code's used_percentage when it reports one. It reads 0 or null before the
+// first response and after /compact, so fall back to current_usage, then to the
+// transcript's last known context size.
+export function getContextUsage(
+  stdin: StdinData,
+  autoCompactWindow?: number | null,
+  transcriptTokens?: number,
+): ContextUsage {
+  const live = getTotalTokens(stdin);
+  const tokens = live > 0 ? live : transcriptTokens ?? 0;
+  const window = stdin.context_window;
+  if (typeof autoCompactWindow === 'number' && autoCompactWindow > 0) {
+    return { percent: toPercent((tokens / autoCompactWindow) * 100), tokens, size: autoCompactWindow };
   }
 
-  const size = stdin.context_window?.context_window_size;
-  if (!size || size <= 0) {
-    return 0;
+  const size = window?.context_window_size ?? 0;
+  const native = window?.used_percentage;
+  if (typeof native === 'number' && Number.isFinite(native) && native > 0) {
+    return { percent: toPercent(native), tokens, size };
   }
-
-  const totalTokens = getTotalTokens(stdin);
-  return Math.min(100, Math.round((totalTokens / size) * 100));
+  return { percent: size > 0 ? toPercent((tokens / size) * 100) : 0, tokens, size };
 }
 
-export function getBufferedPercent(stdin: StdinData): number {
-  const native = getNativePercent(stdin);
-  if (native !== null && native > 0) {
-    return native;
-  }
-
-  const size = stdin.context_window?.context_window_size;
-  if (!size || size <= 0) {
-    return 0;
-  }
-
-  const totalTokens = getTotalTokens(stdin);
-
-  const rawRatio = totalTokens / size;
-  const LOW = 0.05;
-  const HIGH = 0.50;
-  const scale = Math.min(1, Math.max(0, (rawRatio - LOW) / (HIGH - LOW)));
-  const buffer = size * AUTOCOMPACT_BUFFER_PERCENT * scale;
-
-  return Math.min(100, Math.round(((totalTokens + buffer) / size) * 100));
-}
-
-export function isGLMModelId(modelId?: string): boolean {
-  if (!modelId) {
-    return false;
-  }
-  return /^glm-/i.test(modelId.trim());
-}
-
-export function normalizeGLMModelLabel(modelId: string): string | null {
-  if (!isGLMModelId(modelId)) {
-    return null;
-  }
-  const parts = modelId.trim().split('-');
-  if (parts.length >= 1) {
-    // GLM-5-Turbo 格式
-    return parts.map((p, i) => i === 0 ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1)).join('-');
-  }
-  return 'GLM';
+export function isContextUnreported(stdin: StdinData): boolean {
+  const native = stdin.context_window?.used_percentage;
+  return !(typeof native === 'number' && native > 0) && getTotalTokens(stdin) === 0;
 }
 
 export function getModelName(stdin: StdinData): string {
-  const displayName = stdin.model?.display_name?.trim();
-  if (displayName) {
-    // 对 GLM 模型 ID 做格式化显示
-    const normalizedGLM = normalizeGLMModelLabel(displayName);
-    if (normalizedGLM) {
-      return normalizedGLM;
-    }
-    return displayName;
-  }
+  return stdin.model?.display_name?.trim() || stdin.model?.id?.trim() || 'Unknown';
+}
 
-  const modelId = stdin.model?.id?.trim();
-  if (!modelId) {
-    return 'Unknown';
-  }
+function isClaudeModel(model: string): boolean {
+  const lower = model.toLowerCase();
+  return lower.startsWith('claude-') || lower.startsWith('anthropic.');
+}
 
-  const normalizedGLM = normalizeGLMModelLabel(modelId);
-  if (normalizedGLM) {
-    return normalizedGLM;
+// display.modelSource: "stdin" shows what Claude Code requested, "transcript" what the
+// API served, and "auto" switches to the served model only when a proxy swapped in a
+// non-Claude model.
+export function resolveModelName(
+  stdin: StdinData,
+  transcript: TranscriptData | undefined,
+  modelSource: 'auto' | 'stdin' | 'transcript' = 'stdin',
+): string {
+  const stdinModel = getModelName(stdin);
+  const servedModel = sanitizeTranscriptModel(transcript?.lastAssistantModel);
+  if (modelSource === 'stdin' || !servedModel) {
+    return stdinModel;
   }
-
-  const normalizedBedrockLabel = normalizeBedrockModelLabel(modelId);
-  return normalizedBedrockLabel ?? modelId;
+  if (modelSource === 'transcript') {
+    return servedModel;
+  }
+  return isClaudeModel(servedModel) ? stdinModel : servedModel;
 }
 
 export function isBedrockModelId(modelId?: string): boolean {
-  if (!modelId) {
-    return false;
-  }
-  const normalized = modelId.toLowerCase();
-  return normalized.includes('anthropic.claude-');
+  return modelId?.toLowerCase().includes('anthropic.claude-') ?? false;
 }
 
-export function getProviderLabel(stdin: StdinData): string | null {
-  if (isBedrockModelId(stdin.model?.id)) {
-    return 'Bedrock';
+// Vertex AI model IDs use '@' as the version separator (e.g. claude-3-5-sonnet@20241022).
+export function isVertexModelId(modelId?: string): boolean {
+  return modelId?.includes('@') ?? false;
+}
+
+const ENTERPRISE_MODEL_IDS = new Set(['opusplan', 'sonnetplan', 'haikuplan']);
+
+const MINIMAX_ANTHROPIC_ENDPOINTS = new Set([
+  'https://api.minimax.io/anthropic',
+  'https://api.minimaxi.com/anthropic',
+]);
+
+function isMiniMaxAnthropicEndpoint(env: NodeJS.ProcessEnv): boolean {
+  const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || env.ANTHROPIC_API_BASE_URL?.trim();
+  if (!baseUrl) {
+    return false;
   }
-  if (isGLMModelId(stdin.model?.id) || isGLMModelId(stdin.model?.display_name)) {
-    return 'Zhipu';
+  try {
+    const url = new URL(baseUrl);
+    return MINIMAX_ANTHROPIC_ENDPOINTS.has(`${url.origin}${url.pathname.replace(/\/+$/, '')}`);
+  } catch {
+    return false;
   }
+}
+
+export function getProviderLabel(stdin: StdinData, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.CLAUDE_CODE_USE_BEDROCK === '1') return 'Bedrock';
+  if (env.CLAUDE_CODE_USE_VERTEX === '1') return 'Vertex';
+  if (isMiniMaxAnthropicEndpoint(env)) return 'MiniMax';
+  if (ENTERPRISE_MODEL_IDS.has(stdin.model?.id?.toLowerCase() ?? '')) return 'Enterprise';
   return null;
 }
 
-function normalizeBedrockModelLabel(modelId: string): string | null {
-  if (!isBedrockModelId(modelId)) {
-    return null;
-  }
-
-  const lowercaseId = modelId.toLowerCase();
-  const claudePrefix = 'anthropic.claude-';
-  const claudeIndex = lowercaseId.indexOf(claudePrefix);
-  if (claudeIndex === -1) {
-    return null;
-  }
-
-  let suffix = lowercaseId.slice(claudeIndex + claudePrefix.length);
-  suffix = suffix.replace(/-v\d+:\d+$/, '');
-  suffix = suffix.replace(/-\d{8}$/, '');
-
-  const tokens = suffix.split('-').filter(Boolean);
-  if (tokens.length === 0) {
-    return null;
-  }
-
-  const familyIndex = tokens.findIndex((token) => token === 'haiku' || token === 'sonnet' || token === 'opus');
-  if (familyIndex === -1) {
-    return null;
-  }
-
-  const family = tokens[familyIndex];
-  const beforeVersion = readNumericVersion(tokens, familyIndex - 1, -1).reverse();
-  const afterVersion = readNumericVersion(tokens, familyIndex + 1, 1);
-  const versionParts = beforeVersion.length >= afterVersion.length ? beforeVersion : afterVersion;
-  const version = versionParts.length ? versionParts.join('.') : null;
-  const familyLabel = family[0].toUpperCase() + family.slice(1);
-
-  return version ? `Claude ${familyLabel} ${version}` : `Claude ${familyLabel}`;
+function parsePercent(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? toPercent(value) : null;
 }
 
-function readNumericVersion(tokens: string[], startIndex: number, step: -1 | 1): string[] {
-  const parts: string[] = [];
-  for (let i = startIndex; i >= 0 && i < tokens.length; i += step) {
-    if (!/^\d+$/.test(tokens[i])) {
-      break;
-    }
-    parts.push(tokens[i]);
-    if (parts.length === 2) {
-      break;
-    }
+function parseResetAt(value: unknown): Date | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? new Date(value * 1000) : null;
+}
+
+export function getUsageFromStdin(stdin: StdinData): UsageData | null {
+  const limits = stdin.rate_limits;
+  const fiveHour = parsePercent(limits?.five_hour?.used_percentage);
+  const sevenDay = parsePercent(limits?.seven_day?.used_percentage);
+  if (fiveHour === null && sevenDay === null) {
+    return null;
   }
-  return parts;
+  return {
+    fiveHour,
+    sevenDay,
+    fiveHourResetAt: parseResetAt(limits?.five_hour?.resets_at),
+    sevenDayResetAt: parseResetAt(limits?.seven_day?.resets_at),
+  };
+}
+
+// Free text from stdin (session names, output styles, versions) is shown in the terminal.
+export function stdinText(value: unknown, maxLength = 80): string | undefined {
+  return displayLabel(value, maxLength) || undefined;
+}
+
+// Drops the "(1M context)" style suffix; the context bar already shows the window.
+export function stripContextSuffix(name: string): string {
+  return name.replace(/\s*\([^)]*\bcontext\b[^)]*\)/i, '').trim();
+}
+
+export function formatModelName(name: string, format?: ModelFormatMode, override?: string): string {
+  if (override) {
+    return override;
+  }
+  if (!format || format === 'full') {
+    return name;
+  }
+  const compact = stripContextSuffix(name);
+  return format === 'short' ? compact.replace(/^Claude\s+/i, '') : compact;
 }

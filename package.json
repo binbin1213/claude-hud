@@ -1,34 +1,39 @@
 {
   "name": "claude-hud",
-  "version": "0.0.10",
-  "description": "Claude Code 实时状态栏插件",
+  "version": "0.13.1",
+  "description": "Claude Code 实时状态栏 HUD",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "dist/",
+    "src/",
+    "commands/",
+    "scripts/clean-dist.mjs",
+    "scripts/setup.mjs",
+    "scripts/statusline.mjs",
+    ".claude-plugin/"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/clean-dist.mjs && tsc",
     "dev": "tsc --watch",
     "test": "npm run build && node --test",
     "test:coverage": "npm run build && c8 --reporter=text --reporter=lcov node --test",
     "test:update-snapshots": "UPDATE_SNAPSHOTS=1 npm test",
-    "test:stdin": "echo '{\"model\":{\"display_name\":\"Opus\"},\"context_window\":{\"current_usage\":{\"input_tokens\":45000},\"context_window_size\":200000},\"transcript_path\":\"/tmp/test.jsonl\"}' | node dist/index.js"
+    "test:stdin": "npm run build && echo '{\"model\":{\"display_name\":\"Opus\"},\"context_window\":{\"current_usage\":{\"input_tokens\":45000},\"context_window_size\":200000},\"transcript_path\":\"/tmp/test.jsonl\"}' | node dist/index.js"
   },
   "keywords": [
     "claude-code",
     "statusline",
     "hud"
   ],
-  "author": "binbin1213",
+  "author": "Jarrod Watts",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/binbin1213/claude-hud.git"
-  },
   "engines": {
     "node": ">=18.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
+    "@types/node": "^26.6.5",
     "c8": "^11.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^7.0.2"
   }
 }

@@ -1,24 +1,6 @@
-import { readStdin } from './stdin.js';
-import { parseTranscript } from './transcript.js';
-import { render } from './render/index.js';
-import { countConfigs } from './config-reader.js';
-import { getGitStatus } from './git.js';
-import { getUsage } from './usage-api.js';
-import { loadConfig } from './config.js';
-import { parseExtraCmdArg, runExtraCmd } from './extra-cmd.js';
-export type MainDeps = {
-    readStdin: typeof readStdin;
-    parseTranscript: typeof parseTranscript;
-    countConfigs: typeof countConfigs;
-    getGitStatus: typeof getGitStatus;
-    getUsage: typeof getUsage;
-    loadConfig: typeof loadConfig;
-    parseExtraCmdArg: typeof parseExtraCmdArg;
-    runExtraCmd: typeof runExtraCmd;
-    render: typeof render;
-    now: () => number;
-    log: (...args: unknown[]) => void;
-};
-export declare function main(overrides?: Partial<MainDeps>): Promise<void>;
-export declare function formatSessionDuration(sessionStart?: Date, now?: () => number): string;
+import { type GitRepoIdentity, type GitStatus } from "./git.js";
+import { type HudConfig } from "./config.js";
+export declare function isHudDisabled(env?: NodeJS.ProcessEnv): boolean;
+export declare function resolveVcsStatus(config: HudConfig, cwd?: string, repo?: GitRepoIdentity | null): Promise<GitStatus | null>;
+export declare function main(): Promise<void>;
 //# sourceMappingURL=index.d.ts.map

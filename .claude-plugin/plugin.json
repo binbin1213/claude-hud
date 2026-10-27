@@ -1,13 +1,26 @@
 {
   "name": "claude-hud",
-  "description": "Claude Code 实时状态栏 - 上下文健康度、工具活动、代理跟踪、待办进度",
-  "version": "0.0.10",
+  "description": "Claude Code 实时状态栏 HUD - 上下文健康度、工具活动、子代理跟踪和待办进度",
+  "version": "0.13.1",
   "author": {
-    "name": "binbin1213",
-    "url": "https://github.com/binbin1213"
+    "name": "Jarrod Watts",
+    "url": "https://github.com/jarrodwatts"
   },
-  "homepage": "https://github.com/binbin1213/claude-hud",
-  "repository": "https://github.com/binbin1213/claude-hud",
+  "commands": [
+    "./commands/setup.md",
+    "./commands/configure.md"
+  ],
+  "homepage": "https://github.com/jarrodwatts/claude-hud",
+  "repository": "https://github.com/jarrodwatts/claude-hud",
   "license": "MIT",
-  "keywords": ["hud", "monitoring", "statusline", "context", "tools", "agents", "todos", "claude-code"]
+  "keywords": [
+    "hud",
+    "monitoring",
+    "statusline",
+    "context",
+    "tools",
+    "agents",
+    "todos",
+    "claude-code"
+  ]
 }

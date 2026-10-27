@@ -2,44 +2,373 @@
 
 All notable changes to Claude HUD will be documented in this file.
 
-## [中文优化版] - 2026-04-06
-
-### Added
-- 智谱 AI Token 和时间配额实时查询显示
-- 中文界面标签（配额、时间、上下文等）
-- `run-hud.sh` wrapper 脚本确保环境变量正确传递
-- 配额缓存时间优化（60s → 300s）
-
-### Fixed
-- 修正智谱时间配额显示标签（mcp → 时间）
-- 修复 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` 导致的 API 令牌无法传递问题
-
-### Changed
-- 删除与修改版无关的政策性文件（CODE_OF_CONDUCT.md, CONTRIBUTING.md 等）
-- 更新 README.md 添加中文优化版说明和原作者引用
-
----
-
 ## [Unreleased]
 
-## [0.0.10] - 2026-03-14
-
-### Added
-- Semantic HUD color overrides for context and usage states.
-
-### Changed
-- Update the fallback autocompact buffer estimate from `22.5%` (`45k/200k`) to `16.5%` (`33k/200k`) to match current Claude Code `/context` output.
-- Clarify in code comments that the fallback buffer is empirical and may change independently of documented Claude Code releases.
-- Clarify that context percentages and token displays scale with Claude Code's reported context window size, including newer 1M-context sessions.
-- Text-only usage display now shows the 7-day reset countdown when applicable.
-- Rate-limited usage refreshes now keep the last successful values visible while marking the HUD as syncing.
+## [0.13.1] - 2026-10-26
 
 ### Fixed
-- Context percentage no longer starts with an inflated fallback percentage before native data exists.
-- Usage API rate-limit handling is more resilient, including better stale-cache behavior and `Retry-After` parsing.
-- Zero-byte usage lock files now recover instead of leaving the HUD permanently busy.
-- Plugin selection now prefers the highest installed version instead of filesystem mtime.
-- macOS Keychain lookup now prefers account-scoped credentials and avoids cross-account fallback when multiple accounts exist.
+- Session names, the Claude Code version, output style, effort, model and advisor names, the advisor override, scoped usage labels, failing MCP server names, the auth user, and jj labels no longer cut an emoji or flag in half when they hit their length cap (#830).
+
+## [0.13.0] - 2026-10-24
+
+### Added
+- `cost` can now be placed in `elementOrder`. Listed there, the cost segment leaves the first line and becomes its own element, so a `display.mergeGroups` group can show it beside context and usage. Left out (the default), it stays on the first line as before (#827, #828).
+
+### Fixed
+- Tasks deleted with `TaskUpdate` no longer count toward todo progress (#826).
+
+## [0.12.1] - 2026-10-21
+
+### Fixed
+- Recent Claude Code versions log `api-request-blob` lines that repeat earlier tool calls. These no longer make finished tools show as running, count tasks twice, or reset agents to `(<1s)` (#820, #821).
+- Truncated labels (todos, agent descriptions, tool names, file paths, skill and MCP names, added dirs, `--extra-cmd` and external usage labels) no longer cut an emoji or accented letter in half (#822, #823).
+
+## [0.12.0] - 2026-10-19
+
+### Added
+- `display.showAgentEffort` option to show each subagent's reasoning effort next to its model in the agents line, e.g. `◐ code-reviewer [haiku-4.5 ◔ medium]`, read from the subagent's own transcript (#815).
+
+### Fixed
+- Options that read the transcript (tools, agents, todos, config counts, session tokens, and others) no longer reread the whole file on every render. Each run picks up where the last left off, so a long session's HUD no longer slows down and then disappears once the transcript reaches hundreds of MB (#816).
+
+## [0.11.3] - 2026-10-16
+
+### Fixed
+- Background agents whose completion notice is logged as a queued command (seen in forked or resumed sessions) no longer stay `◐` running after they finish (#810).
+
+## [0.11.2] - 2026-10-13
+
+### Fixed
+- The context bar no longer drops to 0% mid-response behind gateways that write all-zero usage for thinking blocks; it keeps the last real size (#809).
+
+## [0.11.1] - 2026-10-12
+
+### Security
+- Git status no longer runs commands that a repository's own config names. A directory whose `.git/config` (or a file it includes, or a submodule's config) set `core.fsmonitor` or a filter driver could run any command as you on every render ([GHSA-fq7j-8hxj-jfqh](https://github.com/jarrodwatts/claude-hud/security/advisories/GHSA-fq7j-8hxj-jfqh)). Filters from your global or system config, such as git-lfs, still run.
+
+### Changed
+- Uncommitted changes inside a submodule no longer mark the repository dirty; a submodule moved to a new commit still does.
+
+## [0.11.0] - 2026-10-12
+
+### Added
+- A `sessionTokens` element, so `elementOrder`, `display.mergeGroups`, and `display.rightAlign` can place the `display.showSessionTokens` summary, for example on the first line. It isn't in the default order: left out, the summary keeps its own last line (#808).
+
+### Fixed
+- Fork agents whose completion notice has no `<tool-use-id>` no longer stay `◐` running after they finish (#798, #799).
+- Input that stalls partway through stdin no longer keeps the HUD waiting until Claude Code closes the pipe (#801, #805).
+- Two sessions updating the daily and weekly cost ledger at the same moment no longer drop one session's baseline (#800, #802).
+- Line diffs come from `git diff-index`, which never writes the index, so a timed-out render can't leave `.git/index.lock` behind. `--no-optional-locks` didn't stop `git diff` from writing it (#807).
+- A folder name containing ` │ ` no longer leaves the project link open over the rest of the HUD when line 1 wraps.
+
+## [0.10.0] - 2026-10-01
+
+This release is a rewrite for simplicity, with the same options (except `display.showDiskUsage`, below) in about half the source and a quarter of the test code. It needs Claude Code v2.1.260 or later.
+
+### Changed
+- Read `version`, `cost`, `prompt_cache`, `session_name`, `output_style`, and `workspace.repo` from Claude Code's stdin instead of deriving them.
+- The prompt-cache expiry and hit rate come from Claude Code's `prompt_cache`, so the expiry no longer reads `expired` while the cache is warm.
+- `display.showCost` shows Claude Code's own cost; the local pricing-table estimate is removed.
+- Context percentage always follows Claude Code's `used_percentage`, falling back to the last request's size in the transcript when Claude Code reports none. `display.autocompactBuffer` and `display.promptCacheTtlSeconds` no longer exist.
+- Session duration is Claude Code's running time for the session.
+- Git status comes from one `git status --porcelain=v2` call, down from four or five, and the branch link comes from `workspace.repo`. A repository with no commits now shows its branch.
+- The compact layout gains expanded's branch link and push-threshold colours, and `display.timeFormat: "elapsed"` now works there.
+- `/claude-hud:setup` installs a small launcher and writes `settings.json` with a helper script instead of hand-built shell commands. Existing setups keep working; re-run setup to switch. It asks nothing unless it would replace another status line; customize afterwards by asking Claude or with `/claude-hud:configure`. A `refreshInterval` you set yourself is kept.
+- `/claude-hud:configure` asks one short set of questions and previews the diff.
+- The default HUD no longer parses the transcript, runs `claude --version`, or keeps context or transcript caches on disk.
+
+### Removed
+- `display.showDiskUsage`. OS gauges are out of scope; show free disk space with `--extra-cmd` instead. Unknown config keys are ignored, so a config that still sets it keeps working without the segment (#796).
+
+### Fixed
+- The macOS memory reading no longer blocks the rest of the render.
+- The daily cost ledger no longer throws on a non-string `session_id`.
+
+### Security
+- Sanitize the output style, tool names, tool targets (paths, Grep patterns, Bash commands), todo text, and the model name before display. They reached the terminal raw.
+- `/claude-hud:setup` writes `settings.json` through a dotfiles symlink and keeps its permissions.
+
+## [0.9.0] - 2026-10-01
+
+### Added
+- `gitStatus.showWorktree` option to show the linked worktree name after the branch, e.g. `git:(feat/x) ⎇ feat-x`, read from stdin `workspace.git_worktree` (#780).
+- `display.usagePace` option to colour usage windows amber or red, marked `▲`, when they are on track to run out before they reset (#779).
+- `display.skillsMaxVisible` option to control how many skill names the skills line shows before `+N more`; `0` means unlimited, default stays 4 (#739).
+- `display.showWeeklyCost` option to show spend since the weekly quota window opened (`Week $123.45`), from the same ledger as `showDailyCost`; subscribers only (#762).
+- `display.showDailyCost` option to show today's cumulative spend across sessions (`Today $12.34`), accumulated from the native stdin `cost.total_cost_usd` into a per-day ledger that resets at local midnight (#695).
+- `display.showCacheHitRate` option to show the session's prompt-cache hit rate as `Cache hit X%` (#741).
+- Expand a leading `~` and `${VAR}` in `display.externalUsagePath` and `display.externalUsageWritePath` (#760).
+- `display.showModelScopedUsage` option to hide the per-model weekly windows (e.g. Fable) while keeping the 5h/7d windows (#728).
+
+### Fixed
+- Read `.claude.json` from inside `CLAUDE_CONFIG_DIR` when it is set, as Claude Code does, so `showAuth`, `showAuthUser`, and MCP counts work with a custom config directory (#776).
+- Refresh the prompt-cache clock when a request starts rather than when its response arrives, ignoring client-side slash command records, interrupt markers, and subagent requests (#719).
+- Treat Agent `tool_result` payloads with `isAsync` or `status: async_launched` as background so the agents line stays up until the task-notification (#734).
+- Pass `--no-optional-locks` on `git diff --numstat` so a timed-out statusline poll cannot leave `.git/index.lock` behind (#726).
+- Render the prompt-cache clock as `until <time>` so the value reads as expiry, not write time (#727).
+- Price 1-hour prompt-cache writes at 2x input instead of 1.25x in the local cost estimate (#758).
+- Show the running session's Claude Code version from stdin, falling back to `claude --version`, so `CC v…` no longer sticks when `claude` is a wrapper script (#753).
+- Keep the context cache fresh when Claude Code reports `used_percentage: 0` while `current_usage` already holds real tokens, so a later empty frame no longer restores a stale percentage (#743).
+- Show the latest response's output speed from the API time it added instead of diffing tokens against wall-clock time between renders (#772).
+- Launch the Windows + Git Bash statusline through the `cmd.exe` launcher so a statusLine shell killed mid-spawn can no longer strand a suspended `node.exe`; re-run `/claude-hud:setup` to pick it up (#748).
+- Ignore `<synthetic>` assistant records when tracking the transcript model (#774).
+- Show Claude Code's generated `ai-title` as the session name when the session was never renamed (#754).
+- Decode every C-style escape git uses in quoted porcelain paths (#765).
+- Count unmerged (`UU`, `UA`) paths in git file stats (#763).
+- Translate the elapsed usage-window suffix (#768).
+
+### Security
+- Exit quietly when the setup command cannot resolve the plugin directory instead of running `dist/index.js` relative to the current project; re-run `/claude-hud:setup` to pick it up (#759).
+- Sanitize session names before display (#754).
+- Validate and read config files through a single file descriptor so a file swapped between the checks cannot bypass them (#732).
+
+### Dependencies
+- Update the development-only `@types/node` package from 26.2.0 to 26.6.2 (#775).
+
+### Docs
+- Document the HUD scope bar in `CONTRIBUTING.md` (#738).
+- Add the ten missing config options and the absolute-path caveat for `display.externalUsagePath` to `README.zh.md` (#730).
+
+## [0.8.0] - 2026-08-18
+
+### Added
+- Load optional per-config-directory overrides from `$CLAUDE_CONFIG_DIR/claude-hud.json` while preserving shared plugin settings (#714).
+- `display.effortFormat` option (`full` | `symbol` | `text`) to render the effort indicator as symbol only or level text only; `full` keeps the current output (#691).
+
+### Security
+- Bound config file size and nesting, reject symlinked or prototype-sensitive config input, and sanitize terminal-bound config labels (#714).
+
+## [0.7.2] - 2026-08-17
+
+### Fixed
+- Anchor prompt-cache expiry to the main-session request, ignore subagent cache writes, and detect 5-minute or 1-hour cache tiers while preserving the configured fallback (#702).
+
+### Security
+- Bound transcript request identifiers before grouping prompt-cache writes (#702).
+
+### Dependencies
+- Update the development-only `@types/node` package from 26.1.2 to 26.2.0 (#711).
+
+## [0.7.1] - 2026-08-11
+
+### Fixed
+- Remove completed agents on the next HUD refresh after one minute and keep completed history from displacing running agents (#704).
+
+### Security
+- Sanitize, validate, and bound agent labels before terminal output (#704).
+
+## [0.7.0] - 2026-08-07
+
+### Added
+- Read bounded model-scoped usage windows from an optional external snapshot while preserving explicit empty stdin snapshots (#690).
+- Configure wall-clock hour cycles and optional seconds without changing the locale-driven default (#692).
+- Right-align an ordered suffix of merged expanded rows with `display.rightAlign` (#693).
+- Price Claude Opus 5, Sonnet 5, and Fable 5 in local cost estimates, including Sonnet's time-limited introductory rate (#694).
+- Detect the official MiniMax Anthropic-compatible endpoints and estimate MiniMax M2.7 token/cache cost without guessing MiniMax M3's request-tier pricing (#696).
+- Surface bounded MCP server failures when MCP activity or config counts are enabled, clearing a failure after a later successful result (#699).
+- Cache derived opt-in authentication labels against the source profile identity (#700).
+
+### Fixed
+- Prevent short-lived Windows statusline processes from orphaning their owned Git process trees, with bounded output, timeouts, and non-interactive read-only Git behavior (#703).
+- Silence `/dev/tty` probe failures during setup command execution (#686).
+- Treat Unicode variation selectors as zero-width in terminal-cell calculations (#687).
+- Count completed and progressive assistant token records after zero-value transcript placeholders (#698).
+- Preserve configured element order in right-aligned rows and cap hostile terminal/config widths (#693).
+
+### Security
+- Sanitize, bound, cache-version, and opt-in MCP error names before terminal rendering (#699).
+- Validate and version derived-auth cache entries, reject symlink/oversized reads, use private permissions, and write through unique exclusive temporary files (#700).
+
+### Dependencies
+- Update the development-only `@types/node` package from 26.1.1 to 26.1.2 (#697).
+
+## [0.6.0] - 2026-07-20
+
+### Added
+- Support `pathLevels: "full"` to show the entire absolute working directory in the project badge, instead of being capped at the last 3 segments (#678).
+- Allow users to reorder visible first-line segments with `projectLineOrder` while preserving the existing default output (#680).
+
+### Fixed
+- Show each agent's resolved runtime model when the launch input omits a model alias, while preserving unknown and provider-qualified model identifiers (#679).
+
+### Security
+- Keep full working-directory paths terminal-safe across compact, expanded, and reordered layouts by stripping control and bidirectional characters before rendering (#678, #680).
+
+## [0.5.1] - 2026-07-17
+
+### Fixed
+- Align context, usage, and opt-in memory progress bars by terminal cell width in CJK locales, including merged and narrow layouts (#673).
+
+## [0.5.0] - 2026-07-16
+
+### Added
+- Render bounded model-scoped weekly usage windows from Claude Code statusline input in expanded and compact layouts, including remaining-value, reset-time, threshold, and custom-color modes (#669).
+
+### Security
+- Sanitize and bound model-scoped usage labels and values before terminal rendering, and keep scoped-only input from overwriting shared external usage snapshots (#669).
+- Clean compiled output before every build and enforce source-to-artifact parity so removed modules cannot remain in release packages (#670).
+
+## [0.4.2] - 2026-07-15
+
+### Fixed
+- Show a useful git ref for detached HEAD sessions by preferring exact tags and falling back to a linked short commit label (#664).
+- Preserve slash-separated branch names in GitHub branch links so clicking the HUD branch opens the expected remote branch (#664).
+- Allow opt-in `--extra-cmd` hooks to use the last non-empty line of sanitized plain-text output in addition to JSON labels (#664).
+- Strip control and bidirectional characters from Git refs in compact rendering (#664).
+
+## [0.4.1] - 2026-07-14
+
+### Fixed
+- Restore the default 80% weekly-usage threshold when the setting is omitted or invalid, preventing the weekly segment from appearing at 0% while preserving the existing usage and environment defaults (#662).
+
+## [0.4.0] - 2026-07-13
+
+### Added
+- Add opt-in routed-provider cost display for Bedrock and Vertex sessions, with explicit native-versus-estimated labeling (#648).
+- Add opt-in authentication method and account display with terminal-safe truncation and active API-key precedence (#652).
+- Add Traditional Chinese (`zh-Hant` / `zh-TW`) across configuration, onboarding, and rendered labels (#645).
+- Add opt-in transcript and automatic model-source modes for proxy users, with bounded terminal-safe model labels (#643).
+
+### Changed
+- Show ultracode sessions as `ultracode(xhigh)` from transcript attachment and `/effort` signals (#640).
+- Move locale-specific time layout into named interpolation patterns so translations control word order and spacing (#647).
+- Keep effort suffixes attached to model names and enforce opt-in render guards consistently (#650).
+
+### Fixed
+- Deduplicate repeated assistant usage by bounded message IDs while preserving the idless transcript fallback (#646).
+- Show cache creation and cache read tokens in compact session-token summaries (#653).
+- Count symlinked rule files and directories with cycle-safe, bounded traversal and cache invalidation (#644).
+- Handle non-ASCII checkout paths correctly in direct-entrypoint tests (#655).
+
+### Removed
+- Drop the `ps`-based parent-process `--effort` fallback (#471); the effort label now comes solely from Claude Code's stdin, which carries the level directly.
+
+### Dependencies
+- Bump `@types/node` from 25.9.3 to 26.1.1 (#657).
+- Bump TypeScript from 6.0.3 to 7.0.2 (#656).
+
+## [0.3.0] - 2026-06-19
+
+### Added
+- Add `display.showProvider` and `display.providerName` so custom proxy users can optionally show provider labels before the model name in compact and expanded layouts (#629).
+
+### Changed
+- Extract shared model badge formatting so compact and expanded layouts keep provider labels and effort suffixes consistent (#629).
+
+### Fixed
+- Harden and document external usage snapshot read paths as absolute-only, with focused regression coverage for relative-path rejection (#637).
+- Add regression coverage for private `speed-cache` directory and cache file permissions introduced by the cache hardening work (#637).
+
+## [0.2.1] - 2026-06-18
+
+### Fixed
+- Require explicit `CLAUDE_HUD_ALLOW_EXTRA_CMD` opt-in before running `--extra-cmd`, and document the local command trust boundary (#619).
+- Merge missing seven-day usage from a configured external snapshot when stdin only supplies the five-hour usage window (#617).
+- Correct Opus 4.5+ local cost estimates to the current standard Anthropic rate while keeping older Opus 4.0/4.1 pricing unchanged (#625).
+
+## [0.2.0] - 2026-06-15
+
+### Added
+- Add opt-in session compaction count display from reliable transcript `compact_boundary` entries (#609).
+- Add `CLAUDE_HUD_DISABLE` as a per-session environment kill switch that exits before stdin, transcript, config, or git work (#610).
+
+### Changed
+- Sync `/claude-hud:configure` documentation with current display options, including compaction count, Skills, MCP, prompt cache, memory, cost, and reset-label controls (#613).
+
+### Dependencies
+- Bump `@types/node` from 25.9.2 to 25.9.3 (#614).
+
+## [0.1.1] - 2026-06-09
+
+### Added
+- Add default-off Skills and MCP activity lines, with sanitized active names and Skill-tool suppression when the Skills line is enabled (#527, #595).
+- Add optional advisor model display with sanitized transcript-derived and override labels (#573).
+- Add `display.autoCompactWindow` support for context denominator calculations, including token-display denominator handling (#589).
+
+### Fixed
+- Render external `balance_label` values alongside stdin `rate_limits` instead of treating them as mutually exclusive (#598, #599).
+- Preserve inherited terminal width in setup-generated statusline commands before probing `/dev/tty`, fixing narrow-pane wrapping/flicker in terminals without a controlling TTY (#581).
+- Use a lightweight Windows Node launcher for PowerShell/cmd setup instead of a PowerShell wrapper on every statusline refresh, reducing Windows render-time overhead while preserving update discovery (#555).
+- Collapse whitespace in multiline Bash tool targets before truncation so the tools line stays single-line (#594).
+- Harden advisor, Skills, and MCP labels against control characters, terminal escapes, bidi controls, and oversized activity names (#573, #595).
+- Validate `autoCompactWindow` as an integer before using it in context calculations (#589).
+
+### Changed
+- Clarify in release docs that `.claude-plugin/plugin.json` is the Claude Code update/cache version source (#591).
+
+### Dependencies
+- Bump `@types/node` from 25.9.1 to 25.9.2 (#593).
+- Refresh the lockfile to clear the transitive `brace-expansion` audit advisory.
+
+## [0.1.0] - 2026-06-03
+
+### Added
+- Effort-level display in the model bracket (#471).
+- Native stdin `cost.total_cost_usd` support, external usage snapshot fallback, prompt-cache countdown, and optional JSON snapshots for stdin `rate_limits` (#381, #477, #478, #570).
+- Vertex AI provider detection with cost estimation disabled for Vertex sessions (#479).
+- Usage display controls for reset labels, absolute/relative reset times, compact display, remaining mode, elapsed/percentage mode, and third-party balance labels (#415, #421, #433, #536, #541, #572).
+- Layout and configuration controls for expanded merge groups, wrapped branch display, terminal width fallbacks, `/add-dir` workspace directories, progress bar colors, tool name wrapping/truncation, and custom line placement (#474, #476, #501, #502, #505, #571, #575).
+- Session start date, last response timestamp, and Skill tool target display (#497, #537).
+
+### Changed
+- Setup is more defensive around marketplace install paths, Windows runtime guidance, Git Bash/MSYS routing, existing statusline backups, and PowerShell wrapper generation (#399, #473, #532, #538, #546, #567).
+- Rendering now handles narrow terminals, unknown terminal widths, CJK ambiguous-width glyphs, branch links, progress-label padding, OSC 8 hyperlinks, and tool wrapping more consistently (#427, #439, #443, #489, #509, #518, #561, #571).
+- Chinese documentation was added and later synced with the English README (#435, #557).
+
+### Fixed
+- Bounded stdin reads to prevent statusline hangs (#378).
+- Context and cache behavior for initial zero-percent frames, post-compact resets, live zero-percent usage, nonzero token totals with zero usage, and fallback todo rendering (#430, #460, #492, #508, #579).
+- Transcript and task state handling for default subagent labels, duplicate-content `TodoWrite` task IDs, background-agent timing, stale transcript agent caches, and adjacent session usage deduplication (#455, #456, #515, #560, #579).
+- Git and render correctness for renamed files, quoted arrow filenames, Unicode paths, line diffs, and OSC link truncation (#451, #543, #561).
+- Platform-specific behavior for Bedrock provider labels, Linux memory parsing, Windows console flashes, unsafe progress-bar code points, and PowerShell setup output (#468, #523, #567).
+- Speed and cost display edge cases, including native cost fallback, speed cache scoping, short-window accumulation, Claude Haiku 4.x pricing, enterprise aliases, and effort schema changes (#440, #453, #486, #491, #496).
+- Windows + PowerShell `/claude-hud:setup` now writes a `statusline.ps1` wrapper with a guarded width fallback and corrected version-directory glob (#521).
+- Added Windows PowerShell 5.1 guidance for writing `settings.json` without a UTF-8 BOM.
+
+### Dependencies
+- Bumped TypeScript and `@types/node` development dependencies across the 0.1.0 cycle (#383, #426, #465, #533, #554, #565).
+
+## [0.0.12] - 2026-04-04
+
+### Added
+- Chinese (`zh`) HUD labels as an explicit opt-in, while keeping English as the default.
+- Guided language selection in `/claude-hud:configure` so users can choose English or Chinese without hand-editing JSON.
+- Offline estimated session cost display via `display.showCost` for known Anthropic model families, derived from local transcript token usage only.
+- Session token totals, output-style display, git push count threshold coloring, configurable model badge formatting, and a custom model override.
+- Git file diff rendering with per-file and total line deltas, plus clickable OSC 8 file links where supported.
+
+### Changed
+- Usage display now relies only on Claude Code's official stdin `rate_limits` fields. Background OAuth usage polling, related cache/lock behavior, and credential-derived subscriber plan labels were removed.
+- Setup and configure flows now better support simple onboarding: Windows setup prefers Node.js guidance, the GitHub star prompt includes `gh` compatibility guidance, and configure now exposes language as a first-class guided choice.
+- Plugin detection, config caching, and transcript-derived activity/session metadata are more robust and better covered by tests.
+
+### Fixed
+- Stabilize Claude Code version cache behavior across resolved binary paths and mtimes, fixing Node 20 CI failures.
+- Stop guessing auth mode from environment variables alone.
+- Preserve task IDs across `TodoWrite`, detect transcript agents recorded as `Agent`, and improve narrow-terminal wrapping including OSC hyperlink width handling.
+- Improve macOS memory reporting, config cache invalidation, and fallback rendering when terminal width is unavailable.
+- Clarify official usage-data behavior and keep Bedrock/unknown pricing cases hidden rather than showing misleading estimates.
+
+## [0.0.10] - 2026-03-23
+
+### Added
+- Configurable HUD color overrides, including named presets, 256-color indices, and hex values.
+- `display.customLine` support for a short custom phrase in the HUD.
+- New opt-in display toggles for session name, combined context mode (`display.contextValue: "both"`), Claude Code version, and approximate system RAM usage in expanded layout.
+
+### Changed
+- Setup and plugin detection now better handle `CLAUDE_CONFIG_DIR`, Windows shell quoting, and Bun `--env-file` installs without inheriting project environment files.
+- Usage display now prefers Claude Code stdin `rate_limits` data when available, still falls back to the existing OAuth/cache path, and presents weekly-only/free-user usage more cleanly.
+- Context percentages and token displays now follow Claude Code's reported context window size, including newer 1M-context sessions, with a lower fallback autocompact estimate that better matches `/context`.
+- Usage text output now keeps the last successful values visible while syncing, shows the 7-day reset countdown when applicable, and clarifies that standard proxy environment variables are the supported way to route Anthropic traffic.
+- Progress bars and expanded-layout output now adapt more cleanly to narrow terminal widths.
+
+### Fixed
+- Setup is more reliable in sessions that previously failed to surface the HUD until Claude Code restarted, and plugin command discovery no longer fails with unknown-skill errors after install.
+- Usage handling is more resilient under OAuth token refreshes, proxy tunnels, explicit TLS overrides, zero-byte lock files, stale-cache recovery, and rate-limit edge cases that previously caused repeated `429` or syncing failures.
+- Account-scoped credential lookup and plugin selection are more reliable for multi-account setups and multiple installed plugin versions.
+- Expanded-layout rendering now preserves speed, duration, extra labels, and weekly-only usage output correctly.
+- Tool execution no longer scrolls the terminal to the top, and transcript reparsing now avoids repeatedly caching partial parse results on large histories.
 
 ---
 

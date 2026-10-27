@@ -1,282 +1,77 @@
 ---
-description: Configure HUD display options (layout, presets, display elements) while preserving advanced manual overrides
+description: 配置 HUD 显示选项（布局、语言、预设、显示元素），同时保留手动设置的高级覆盖项
 allowed-tools: Read, Write, AskUserQuestion
 ---
 
-# Configure Claude HUD
+# 配置 Claude HUD
 
-**FIRST**: Use the Read tool to load `~/.claude/plugins/claude-hud/config.json` if it exists.
+## 读取当前配置
 
-Store current values and note whether config exists (determines which flow to use).
+配置目录是设置了 `$CLAUDE_CONFIG_DIR` 时的该目录，否则是 `~/.claude`。如果以下文件存在，读取它们：
 
-## Always On (Core Features)
+1. `plugins/claude-hud/config.json`：基础配置。本命令只写入这个文件。
+2. 配置目录下的 `claude-hud.json`：手动维护的按目录覆盖配置。它结构相同，值优先。永远不要写入或删除它。
 
-These are always enabled and NOT configurable:
-- Model name `[Opus]`
-- Context bar `████░░░░░░ 45%`
+生效配置是基础配置叠加覆盖配置后的结果：嵌套对象按键合并，数组和标量则整个替换。缺失的键使用 README 配置表中的默认值。描述当前状态时使用生效值。
 
-Advanced settings such as `colors.*`, `pathLevels`, `display.usageThreshold`, and
-`display.environmentThreshold` are preserved when saving but are not edited by this guided flow.
+## 询问
 
----
+用 AskUserQuestion 询问，分两批，每批最多四个问题。每道题的选项里写出当前值。多选问题中，被选中的项设为 `true`，未选中的设为 `false`。
 
-## Two Flows Based on Config State
+**布局**（单选）
+- "展开"：`lineLayout: "expanded"`, `showSeparators: false`
+- "紧凑"：`lineLayout: "compact"`, `showSeparators: false`
+- "紧凑 + 分隔线"：`lineLayout: "compact"`, `showSeparators: true`
 
-### Flow A: New User (no config)
-Questions: **Layout → Preset → Turn Off → Turn On**
+**活动行**（多选）
+- "工具"：`display.showTools`
+- "子代理"：`display.showAgents`
+- "待办"：`display.showTodos`
+- "技能与 MCP"：`display.showSkills`, `display.showMcp`
 
-### Flow B: Update Config (config exists)
-Questions: **Turn Off → Turn On → Git Style → Layout/Reset** (4 questions max)
+**会话信息**（多选）
+- "费用"：`display.showCost`
+- "时长"：`display.showDuration`
+- "会话名称"：`display.showSessionName`
+- "推理强度"：`display.showEffortLevel`
 
----
+**用量限制**（单选）
+- "进度条（默认）"：`display.showUsage: true`, `display.usageBarEnabled: true`, `display.usageCompact: false`
+- "文本"：`display.showUsage: true`, `display.usageBarEnabled: false`, `display.usageCompact: false`
+- "紧凑"：`display.showUsage: true`, `display.usageCompact: true`
+- "隐藏"：`display.showUsage: false`
 
-## Flow A: New User (4 Questions)
+**Git**（单选）
+- "分支 + 未提交标记（默认）"：`gitStatus.enabled: true`, `showDirty: true`, `showAheadBehind: false`, `showFileStats: false`
+- "仅分支"：`gitStatus.enabled: true`, `showDirty: false`, `showAheadBehind: false`, `showFileStats: false`
+- "领先/落后"：`gitStatus.enabled: true`, `showDirty: true`, `showAheadBehind: true`, `showFileStats: false`
+- "文件统计"：`gitStatus.enabled: true`, `showDirty: true`, `showAheadBehind: false`, `showFileStats: true`
 
-### Q1: Layout
-- header: "Layout"
-- question: "Choose your HUD layout:"
-- multiSelect: false
-- options:
-  - "Expanded (Recommended)" - Split into semantic lines (identity, project, environment, usage)
-  - "Compact" - Everything on one line
-  - "Compact + Separators" - One line with separator before activity
+**语言**（单选）
+- "保持当前"
+- "简体中文"：`language: "zh-Hans"`
+- "English"：`language: "en"`
+- "繁體中文"：`language: "zh-Hant"`
 
-### Q2: Preset
-- header: "Preset"
-- question: "Choose a starting configuration:"
-- multiSelect: false
-- options:
-  - "Full" - Everything enabled (Recommended)
-  - "Essential" - Activity + git, minimal info
-  - "Minimal" - Core only (model, context bar)
+**自定义行**（单选）
+- "保持当前"
+- "输入文本"：询问文本（最多 80 个字符），保存为 `display.customLine`
+- "移除"：仅当已设置时显示；保存 `display.customLine: ""`
 
-### Q3: Turn Off (based on chosen preset)
-- header: "Turn Off"
-- question: "Disable any of these? (enabled by your preset)"
-- multiSelect: true
-- options: **ONLY items that are ON in the chosen preset** (max 4)
-  - "Tools activity" - ◐ Edit: file.ts | ✓ Read ×3
-  - "Agents status" - ◐ explore [haiku]: Finding code
-  - "Todo progress" - ▸ Fix bug (2/5 tasks)
-  - "Project name" - my-project path display
-  - "Git status" - git:(main*) branch indicator
-  - "Config counts" - 2 CLAUDE.md | 4 rules
-  - "Token breakdown" - (in: 45k, cache: 12k)
-  - "Output speed" - out: 42.1 tok/s
-  - "Usage limits" - 5h: 25% | 7d: 10%
-  - "Session duration" - ⏱️ 5m
-  - "Session name" - fix-auth-bug (session slug or custom title)
+如果用户取消任何问题，说"已取消配置。"并停止。
 
-### Q4: Turn On (based on chosen preset)
-- header: "Turn On"
-- question: "Enable any of these? (disabled by your preset)"
-- multiSelect: true
-- options: **ONLY items that are OFF in the chosen preset** (max 4)
-  - (same list as above, filtered to OFF items)
+## 预览并确认
 
-**Note:** If preset has all items ON (Full), Q4 shows "Nothing to enable - Full preset has everything!"
-If preset has all items OFF (Minimal), Q3 shows "Nothing to disable - Minimal preset is already minimal!"
+将改动与生效配置比较，算出发生变化的键。
 
----
+- 如果没有变化，说"无需更改 - 配置保持不变。"并停止。
+- 否则逐行显示每个变化的键：`键: 旧值 → 新值`。
+- 如果某个变化的键同时也在 `claude-hud.json` 中设置过，警告覆盖配置仍然优先，并显示生效值。
 
-## Flow B: Update Config (4 Questions)
+然后询问"保存这些更改吗？"
 
-### Q1: Turn Off
-- header: "Turn Off"
-- question: "What do you want to DISABLE? (currently enabled)"
-- multiSelect: true
-- options: **ONLY items currently ON** (max 4, prioritize Activity first)
-  - "Tools activity" - ◐ Edit: file.ts | ✓ Read ×3
-  - "Agents status" - ◐ explore [haiku]: Finding code
-  - "Todo progress" - ▸ Fix bug (2/5 tasks)
-  - "Project name" - my-project path display
-  - "Git status" - git:(main*) branch indicator
-  - "Session name" - fix-auth-bug (session slug or custom title)
-  - "Usage bar style" - ██░░ 25% visual bar (only if usageBarEnabled is true)
+## 写入
 
-If more than 4 items ON, show Activity items (Tools, Agents, Todos, Project, Git) first.
-Info items (Counts, Tokens, Usage, Speed, Duration) can be turned off via "Reset to Minimal" in Q4.
+写入 `plugins/claude-hud/config.json`，必要时创建目录。从现有的基础文件开始，只改选中的键。其他所有键保持原样，包括本命令不询问的设置，例如 `colors`、阈值、`elementOrder`、`mergeGroups` 和 `display.externalUsage*`。写入合法 JSON，使用 2 空格缩进。
 
-### Q2: Turn On
-- header: "Turn On"
-- question: "What do you want to ENABLE? (currently disabled)"
-- multiSelect: true
-- options: **ONLY items currently OFF** (max 4)
-  - "Config counts" - 2 CLAUDE.md | 4 rules
-  - "Token breakdown" - (in: 45k, cache: 12k)
-  - "Output speed" - out: 42.1 tok/s
-  - "Usage limits" - 5h: 25% | 7d: 10%
-  - "Usage bar style" - ██░░ 25% visual bar (only if usageBarEnabled is false)
-  - "Session name" - fix-auth-bug (session slug or custom title)
-  - "Session duration" - ⏱️ 5m
-
-### Q3: Git Style (only if Git is currently enabled)
-- header: "Git Style"
-- question: "How much git info to show?"
-- multiSelect: false
-- options:
-  - "Branch only" - git:(main)
-  - "Branch + dirty" - git:(main*) shows uncommitted changes
-  - "Full details" - git:(main* ↑2 ↓1) includes ahead/behind
-  - "File stats" - git:(main* !2 +1 ?3) Starship-compatible format
-
-**Skip Q3 if Git is OFF** - proceed to Q4.
-
-### Q4: Layout/Reset
-- header: "Layout/Reset"
-- question: "Change layout or reset to preset?"
-- multiSelect: false
-- options:
-  - "Keep current" - No layout/preset changes (current: Expanded/Compact/Compact + Separators)
-  - "Switch to Expanded" - Split into semantic lines (if not current)
-  - "Switch to Compact" - Everything on one line (if not current)
-  - "Reset to Full" - Enable everything
-  - "Reset to Essential" - Activity + git only
-
----
-
-## Preset Definitions
-
-**Full** (everything ON):
-- Activity: Tools ON, Agents ON, Todos ON
-- Info: Counts ON, Tokens ON, Usage ON, Duration ON, Session Name ON
-- Git: ON (with dirty indicator, no ahead/behind)
-
-**Essential** (activity + git):
-- Activity: Tools ON, Agents ON, Todos ON
-- Info: Counts OFF, Tokens OFF, Usage OFF, Duration ON, Session Name OFF
-- Git: ON (with dirty indicator)
-
-**Minimal** (core only — this is the default):
-- Activity: Tools OFF, Agents OFF, Todos OFF
-- Info: Counts OFF, Tokens OFF, Usage OFF, Duration OFF, Session Name OFF
-- Git: ON (with dirty indicator)
-
----
-
-## Layout Mapping
-
-| Option | Config |
-|--------|--------|
-| Expanded | `lineLayout: "expanded", showSeparators: false` |
-| Compact | `lineLayout: "compact", showSeparators: false` |
-| Compact + Separators | `lineLayout: "compact", showSeparators: true` |
-
----
-
-## Git Style Mapping
-
-| Option | Config |
-|--------|--------|
-| Branch only | `gitStatus: { enabled: true, showDirty: false, showAheadBehind: false, showFileStats: false }` |
-| Branch + dirty | `gitStatus: { enabled: true, showDirty: true, showAheadBehind: false, showFileStats: false }` |
-| Full details | `gitStatus: { enabled: true, showDirty: true, showAheadBehind: true, showFileStats: false }` |
-| File stats | `gitStatus: { enabled: true, showDirty: true, showAheadBehind: false, showFileStats: true }` |
-
----
-
-## Element Mapping
-
-| Element | Config Key |
-|---------|------------|
-| Tools activity | `display.showTools` |
-| Agents status | `display.showAgents` |
-| Todo progress | `display.showTodos` |
-| Project name | `display.showProject` |
-| Git status | `gitStatus.enabled` |
-| Config counts | `display.showConfigCounts` |
-| Token breakdown | `display.showTokenBreakdown` |
-| Output speed | `display.showSpeed` |
-| Usage limits | `display.showUsage` |
-| Usage bar style | `display.usageBarEnabled` |
-| Session name | `display.showSessionName` |
-| Session duration | `display.showDuration` |
-
-**Always true (not configurable):**
-- `display.showModel: true`
-- `display.showContextBar: true`
-
----
-
-## Usage Style Mapping
-
-| Option | Config |
-|--------|--------|
-| Bar style | `display.usageBarEnabled: true` — Shows `██░░ 25% (1h 30m / 5h)` |
-| Text style | `display.usageBarEnabled: false` — Shows `5h: 25% (1h 30m)` |
-
-**Note**: Usage style only applies when `display.showUsage: true`. When 7d usage >= 80%, it also shows with the same style.
-
----
-
-## Processing Logic
-
-### For New Users (Flow A):
-1. Apply chosen preset as base
-2. Apply Turn Off selections (set those items to OFF)
-3. Apply Turn On selections (set those items to ON)
-4. Apply chosen layout
-
-### For Returning Users (Flow B):
-1. Start from current config
-2. Apply Turn Off selections (set to OFF, including usageBarEnabled if selected)
-3. Apply Turn On selections (set to ON, including usageBarEnabled if selected)
-4. Apply Git Style selection (if shown)
-5. If "Reset to [preset]" selected, override with preset values
-6. If layout change selected, apply it
-
----
-
-## Before Writing - Validate & Preview
-
-**GUARDS - Do NOT write config if:**
-- User cancels (Esc) → say "Configuration cancelled."
-- No changes from current config → say "No changes needed - config unchanged."
-
-**Show preview before saving:**
-
-1. **Summary of changes:**
-```
-Layout: Compact → Expanded
-Git style: Branch + dirty
-Changes:
-  - Usage limits: OFF → ON
-  - Config counts: ON → OFF
-```
-
-2. **Preview of HUD (Expanded layout):**
-```
-[Opus | Pro] │ my-project git:(main*)
-Context ████░░░░░ 45% │ Usage ██░░░░░░░░ 25% (1h 30m / 5h)
-◐ Edit: file.ts | ✓ Read ×3
-▸ Fix auth bug (2/5)
-```
-
-**Preview of HUD (Compact layout):**
-```
-[Opus | Pro] ████░░░░░ 45% | my-project git:(main*) | 5h: 25% | ⏱️ 5m
-◐ Edit: file.ts | ✓ Read ×3
-▸ Fix auth bug (2/5)
-```
-
-3. **Confirm**: "Save these changes?"
-
----
-
-## Write Configuration
-
-Write to `~/.claude/plugins/claude-hud/config.json`.
-
-Merge with existing config, preserving:
-- `pathLevels` (not in configure flow)
-- `display.usageThreshold` (advanced config)
-- `display.environmentThreshold` (advanced config)
-- `colors` (advanced manual palette overrides)
-
-**Migration note**: Old configs with `layout: "default"` or `layout: "separators"` are automatically migrated to the new `lineLayout` + `showSeparators` format on load.
-
----
-
-## After Writing
-
-Say: "Configuration saved! The HUD will reflect your changes immediately."
+然后说："配置已保存！HUD 会在下次刷新时生效。"并说明 README 记录了其他所有选项。
